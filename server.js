@@ -44,19 +44,91 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // Giới hạn 10MB
 });
 
+
 // Kết nối database MySQL
 const db = mysql.createPool(dbConfig);
 
-// Test kết nối
-db.getConnection((err, connection) => {
-  if (err) {
-    console.error('Lỗi kết nối MySQL:', err.message);
-    process.exit(1);
-  } else {
+// Tự động khởi tạo database khi server khởi động lần đầu
+async function initializeDatabase() {
+  const connection = await db.promise().getConnection();
+  try {
     console.log('Đã kết nối MySQL thành công.');
+
+    // Tạo bảng users
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        full_name VARCHAR(200),
+        employee_id VARCHAR(50),
+        department VARCHAR(200),
+        position VARCHAR(200),
+        role ENUM('admin', 'user') DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Tạo bảng timesheets
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS timesheets (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        month INT NOT NULL,
+        year INT NOT NULL,
+        file_name VARCHAR(255),
+        sheet_data LONGTEXT,
+        uploaded_by INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Tạo bảng timesheet_records
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS timesheet_records (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        timesheet_id INT NOT NULL,
+        employee_id VARCHAR(50),
+        employee_name VARCHAR(200),
+        department VARCHAR(200),
+        position VARCHAR(200),
+        password VARCHAR(100),
+        cccd VARCHAR(50),
+        day_data LONGTEXT,
+        raw_row LONGTEXT,
+        headers LONGTEXT,
+        total_work_days DECIMAL(10,2) DEFAULT 0,
+        overtime_weekday DECIMAL(10,2) DEFAULT 0,
+        overtime_weekend DECIMAL(10,2) DEFAULT 0,
+        overtime_holiday DECIMAL(10,2) DEFAULT 0,
+        night_shift DECIMAL(10,2) DEFAULT 0,
+        total_salary DECIMAL(15,2) DEFAULT 0,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (timesheet_id) REFERENCES timesheets(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Tạo tài khoản admin mặc định nếu chưa có
+    const [adminRows] = await connection.query(`SELECT id FROM users WHERE username = 'admin' LIMIT 1`);
+    if (adminRows.length === 0) {
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      await connection.query(
+        `INSERT INTO users (username, password, full_name, role) VALUES ('admin', ?, 'Quản Trị Viên', 'admin')`,
+        [hashedPassword]
+      );
+      console.log('✅ Đã tạo tài khoản admin mặc định (admin / admin123)');
+    }
+
+    console.log('✅ Database đã sẵn sàng.');
+  } catch (err) {
+    console.error('Lỗi khởi tạo database:', err.message);
+  } finally {
     connection.release();
   }
-});
+}
+
+initializeDatabase();
+
 
 // Middleware
 app.use(bodyParser.json({ limit: '50mb' }));
