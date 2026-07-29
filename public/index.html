@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Tra Cứu Bảng Công</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Trang đăng nhập -->
+        <div id="loginPage" class="page active">
+            <div class="login-box">
+                <div class="login-header">
+                    <div class="login-badge">TRA CỨU DỮ LIỆU</div>
+                    <h1>Hệ Thống Tra Cứu Bảng Công</h1>
+                    <p class="login-subtitle">Nhập MSNV và Mật khẩu từ bảng công để tra cứu</p>
+                </div>
+
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="username" id="usernameLabel">Mã Số Nhân Viên (MSNV)</label>
+                        <div class="input-wrapper">
+                            <span class="input-icon">👤</span>
+                            <input 
+                                type="text" 
+                                id="username" 
+                                name="username" 
+                                placeholder="Nhập MSNV của bạn (ví dụ: 732304078)"
+                                required
+                                autocomplete="off"
+                            >
+                        </div>
+                    </div>
+
+                    <div class="form-group password-group">
+                        <label for="password">Mật khẩu</label>
+                        <div class="input-wrapper">
+                            <span class="input-icon">🔒</span>
+                            <input 
+                                type="password" 
+                                id="password" 
+                                name="password" 
+                                placeholder="Nhập mật khẩu"
+                                required
+                                autocomplete="off"
+                            >
+                        </div>
+                        <small class="help-text">
+                            <span id="passwordHelp">Mật khẩu được cấp trong file bảng công</span>
+                        </small>
+                    </div>
+
+                    <button type="submit" id="submitBtn" class="btn-submit">
+                        <span id="btnText">Đăng Nhập Tra Cứu</span>
+                    </button>
+                </form>
+
+                <div id="message" class="message"></div>
+            </div>
+        </div>
+
+        <!-- Trang kết quả tra cứu (User) -->
+        <div id="userResultPage" class="page">
+            <div class="result-box user-result-box">
+                <!-- Header thông tin nhân viên -->
+                <div class="user-header-info">
+                    <div class="info-row">
+                        <div class="info-col">
+                            <span class="info-title">MSNV</span>
+                            <span id="userMSNV" class="info-data"></span>
+                        </div>
+                        <div class="info-col">
+                            <span class="info-title">HỌ VÀ TÊN</span>
+                            <span id="userFullName" class="info-data"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bảng công của user -->
+                <div id="userTimesheetSection" class="user-timesheet-display" style="display: none;">
+
+
+                    <!-- Container 2 bảng -->
+                    <div class="timesheet-container">
+                        <!-- Bảng tổng hợp (trái) -->
+                        <div class="summary-table-wrapper">
+                            <table class="summary-table" id="summaryTable">
+                                <thead>
+                                    <tr>
+                                        <th colspan="2" class="table-title title-trongca">TRONG CA</th>
+                                        <th colspan="2" class="table-title title-phutroi">PHỤ TRỘI (GIỜ)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="summaryTableBody">
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Bảng chi tiết theo ngày (phải) -->
+                        <div class="detail-table-wrapper">
+                            <div class="detail-table-header" id="detailTableHeader">
+                                Bảng công chi tiết tháng
+                            </div>
+                            <div class="detail-table-container">
+                                <table class="detail-table" id="detailTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Ngày</th>
+                                            <th class="tc-col">TC</th>
+                                            <th class="pt-col">PT</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="detailTableBody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="logout-action-container">
+                    <button onclick="logout()" class="btn-logout">
+                        ↩ Tra Cứu Khác
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trang quản trị (Admin) -->
+        <div id="adminPage" class="page">
+            <div class="admin-box">
+                <div class="admin-header">
+                    <div>
+                        <h2>🎛️ Quản Trị Viên Hệ Thống</h2>
+                        <p id="adminWelcome" class="welcome-text"></p>
+                    </div>
+                    <button onclick="logout()" class="btn-logout">
+                        Đăng Xuất
+                    </button>
+                </div>
+
+                <!-- Quản lý bảng công -->
+                <div id="timesheetsTab" class="tab-content active">
+                    <div class="admin-content">
+                        <div class="section-header">
+                            <h3>📊 Danh Sách Bảng Công</h3>
+                            <button class="btn-primary" onclick="showUploadDialog()">
+                                📤 Tải Lên Bảng Công Mới
+                            </button>
+                        </div>
+
+                        <div id="timesheetsList" class="timesheets-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Upload Bảng Công -->
+        <div id="uploadModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📤 Tải Lên Bảng Công Excel</h3>
+                    <button class="close-btn" onclick="closeUploadDialog()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-icon">📁</div>
+                        <p>Kéo thả file Excel vào đây hoặc</p>
+                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none;">
+                        <button class="btn-select-file" onclick="document.getElementById('fileInput').click()">
+                            Chọn File Excel
+                        </button>
+                        <small class="help-text">Hỗ trợ file: .xlsx, .xls (Tối đa 10MB)</small>
+                    </div>
+                    <div id="uploadProgress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <p id="uploadStatus">Đang tải lên...</p>
+                    </div>
+                    <div id="uploadMessage" class="message"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Xem Chi Tiết Bảng Công -->
+        <div id="timesheetModal" class="modal">
+            <div class="modal-content modal-large">
+                <div class="modal-header">
+                    <h3 id="timesheetModalTitle">Chi Tiết Bảng Công</h3>
+                    <button class="close-btn" onclick="closeTimesheetModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="timesheetDetails" class="timesheet-details"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
