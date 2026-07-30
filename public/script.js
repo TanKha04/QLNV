@@ -20,6 +20,11 @@ function initializeApp() {
     const adminBtn = document.getElementById('adminModeBtn');
     if (adminBtn) adminBtn.addEventListener('click', () => switchMode(true));
 
+    const changePasswordForm = document.getElementById('changePasswordForm');
+    if (changePasswordForm) {
+        changePasswordForm.addEventListener('submit', handleChangePassword);
+    }
+
     // Kiểm tra session hiện tại
     checkSession();
 }
@@ -45,7 +50,10 @@ function switchMode(adminMode) {
     if (adminMode) {
         // Chế độ Admin
         if (passwordGroup) passwordGroup.classList.remove('hidden');
-        if (passwordInput) passwordInput.required = true;
+        if (passwordInput) {
+            passwordInput.required = true;
+            passwordInput.placeholder = 'Nhập mật khẩu Admin';
+        }
         if (passwordHelp) passwordHelp.textContent = 'Yêu cầu nhập tên đăng nhập và mật khẩu Quản trị viên';
         if (btnText) btnText.textContent = 'Đăng Nhập Admin';
         if (usernameLabel) usernameLabel.textContent = 'Tên Đăng Nhập Admin';
@@ -55,12 +63,15 @@ function switchMode(adminMode) {
     } else {
         // Chế độ Nhân viên
         if (passwordGroup) passwordGroup.classList.remove('hidden');
-        if (passwordInput) passwordInput.required = true;
-        if (passwordHelp) passwordHelp.textContent = 'Nhập MSNV và Mật khẩu từ bảng công';
+        if (passwordInput) {
+            passwordInput.required = true;
+            passwordInput.placeholder = 'Nhập mật khẩu ( 4 số cuối CCCD)';
+        }
+        if (passwordHelp) passwordHelp.textContent = '';
         if (btnText) btnText.textContent = 'Đăng Nhập Tra Cứu';
         if (usernameLabel) usernameLabel.textContent = 'Mã Số Nhân Viên (MSNV)';
-        if (usernameInput) usernameInput.placeholder = 'Nhập MSNV của bạn (ví dụ: 732304078)';
-        if (loginSubtitle) loginSubtitle.textContent = 'Nhập MSNV và Mật khẩu từ bảng công để tra cứu';
+        if (usernameInput) usernameInput.placeholder = 'Nhập MSNV';
+        if (loginSubtitle) loginSubtitle.textContent = '';
         if (adminToggleBtn) adminToggleBtn.innerHTML = '⚙️ Đăng nhập dành cho Quản trị viên';
     }
     
@@ -1147,7 +1158,10 @@ function displayEmployeeTimesheetSummary(record) {
     detailTable.closest('table').style.display = '';
     let detailHtml = '';
 
-    for (let day = 1; day <= 31; day++) {
+    // Tính số ngày thực tế trong tháng
+    const daysInMonth = new Date(record.year, record.month, 0).getDate();
+
+    for (let day = 1; day <= daysInMonth; day++) {
         const d = dayData[day];
         const date = new Date(record.year, record.month - 1, day);
         const dow = date.getDay();
@@ -1157,7 +1171,8 @@ function displayEmployeeTimesheetSummary(record) {
         const tcVal = (d && d.tc !== null && d.tc !== undefined) ? d.tc : '';
         const ptVal = (d && d.pt !== null && d.pt !== undefined) ? d.pt : '';
 
-        if (tcVal !== '' || ptVal !== '') {
+        // Hiển thị tất cả ngày; Chủ nhật luôn tô màu vàng dù có hay không có dữ liệu
+        if (tcVal !== '' || ptVal !== '' || isSunday) {
             detailHtml += `
                 <tr class="${isSunday ? 'sunday-row' : (isSaturday ? 'saturday-row' : '')}">
                     <td class="day-label">Ngày ${day}</td>
@@ -1218,22 +1233,22 @@ function calculateTimesheetStats(record) {
 // Hiển thị chi tiết theo ngày
 function displayDailyDetails(record) {
     const detailBody = document.getElementById('detailTableBody');
-    const daysInMonth = 31;
+    const daysInMonth = new Date(record.year, record.month, 0).getDate();
     let html = '';
     
     for (let day = 1; day <= daysInMonth; day++) {
         const dayData = record.day_data[day] || { tc: null, pt: null };
         
-        // Chỉ hiển thị ngày có dữ liệu
-        if (dayData.tc !== null || dayData.pt !== null) {
-            const tcValue = dayData.tc !== null ? (dayData.tc === 'TS' ? 'TS' : dayData.tc) : '';
-            const ptValue = dayData.pt !== null ? dayData.pt : '';
-            
-            // Kiểm tra ngày cuối tuần
-            const date = new Date(record.year, record.month - 1, day);
-            const isSunday = date.getDay() === 0;
-            const isSaturday = date.getDay() === 6;
-            
+        const tcValue = dayData.tc !== null ? (dayData.tc === 'TS' ? 'TS' : dayData.tc) : '';
+        const ptValue = dayData.pt !== null ? dayData.pt : '';
+        
+        // Kiểm tra ngày cuối tuần
+        const date = new Date(record.year, record.month - 1, day);
+        const isSunday = date.getDay() === 0;
+        const isSaturday = date.getDay() === 6;
+
+        // Hiển thị tất cả ngày có dữ liệu; Chủ nhật luôn tô vàng
+        if (tcValue !== '' || ptValue !== '' || isSunday) {
             html += `
                 <tr class="${isSunday ? 'sunday-row' : (isSaturday ? 'saturday-row' : '')}">
                     <td class="day-label">Ngày ${day}</td>
@@ -1246,3 +1261,80 @@ function displayDailyDetails(record) {
     
     detailBody.innerHTML = html;
 }
+
+// ============= ĐỔI MẬT KHẨU QUẢN TRỊ VIÊN =============
+
+function showChangePasswordDialog() {
+    const modal = document.getElementById('changePasswordModal');
+    if (modal) {
+        document.getElementById('currentPassword').value = '';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmPassword').value = '';
+        const msgEl = document.getElementById('changePasswordMessage');
+        if (msgEl) {
+            msgEl.textContent = '';
+            msgEl.className = 'message';
+        }
+        modal.classList.add('show');
+    }
+}
+
+function closeChangePasswordDialog() {
+    const modal = document.getElementById('changePasswordModal');
+    if (modal) {
+        modal.classList.remove('show');
+    }
+}
+
+async function handleChangePassword(e) {
+    e.preventDefault();
+
+    const currentPassword = document.getElementById('currentPassword').value.trim();
+    const newPassword = document.getElementById('newPassword').value.trim();
+    const confirmPassword = document.getElementById('confirmPassword').value.trim();
+    const msgEl = document.getElementById('changePasswordMessage');
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+        msgEl.textContent = 'Vui lòng nhập đầy đủ thông tin';
+        msgEl.className = 'message error show';
+        return;
+    }
+
+    if (newPassword.length < 6) {
+        msgEl.textContent = 'Mật khẩu mới phải có ít nhất 6 ký tự';
+        msgEl.className = 'message error show';
+        return;
+    }
+
+    if (newPassword !== confirmPassword) {
+        msgEl.textContent = 'Mật khẩu mới và xác nhận mật khẩu không khớp nhau';
+        msgEl.className = 'message error show';
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/admin/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            msgEl.textContent = '✅ Đổi mật khẩu thành công!';
+            msgEl.className = 'message success show';
+            setTimeout(() => {
+                closeChangePasswordDialog();
+            }, 1500);
+        } else {
+            msgEl.textContent = data.message || 'Lỗi khi đổi mật khẩu';
+            msgEl.className = 'message error show';
+        }
+    } catch (error) {
+        console.error('Lỗi đổi mật khẩu:', error);
+        msgEl.textContent = 'Lỗi kết nối máy chủ';
+        msgEl.className = 'message error show';
+    }
+}
+

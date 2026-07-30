@@ -15,9 +15,8 @@
         <div id="loginPage" class="page active">
             <div class="login-box">
                 <div class="login-header">
-                    <div class="login-badge">TRA CỨU DỮ LIỆU</div>
+                    <img src="logo1.png" alt="Logo" class="login-logo">
                     <h1>Hệ Thống Tra Cứu Bảng Công</h1>
-                    <p class="login-subtitle">Nhập MSNV và Mật khẩu từ bảng công để tra cứu</p>
                 </div>
 
                 <form id="loginForm">
@@ -29,7 +28,7 @@
                                 type="text" 
                                 id="username" 
                                 name="username" 
-                                placeholder="Nhập MSNV của bạn (ví dụ: 732304078)"
+                                placeholder="Nhập MSNV"
                                 required
                                 autocomplete="off"
                             >
@@ -44,14 +43,11 @@
                                 type="password" 
                                 id="password" 
                                 name="password" 
-                                placeholder="Nhập mật khẩu"
+                                placeholder="Nhập mật khẩu ( 4 số cuối CCCD)"
                                 required
                                 autocomplete="off"
                             >
                         </div>
-                        <small class="help-text">
-                            <span id="passwordHelp">Mật khẩu được cấp trong file bảng công</span>
-                        </small>
                     </div>
 
                     <button type="submit" id="submitBtn" class="btn-submit">
@@ -138,9 +134,14 @@
                         <h2>🎛️ Quản Trị Viên Hệ Thống</h2>
                         <p id="adminWelcome" class="welcome-text"></p>
                     </div>
-                    <button onclick="logout()" class="btn-logout">
-                        Đăng Xuất
-                    </button>
+                    <div class="admin-header-actions">
+                        <button onclick="showChangePasswordDialog()" class="btn-secondary">
+                            🔑 Đổi Mật Khẩu
+                        </button>
+                        <button onclick="logout()" class="btn-logout">
+                            Đăng Xuất
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Quản lý bảng công -->
@@ -196,6 +197,46 @@
                 </div>
                 <div class="modal-body">
                     <div id="timesheetDetails" class="timesheet-details"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Đổi Mật Khẩu Admin -->
+        <div id="changePasswordModal" class="modal">
+            <div class="modal-content" style="max-width: 440px;">
+                <div class="modal-header">
+                    <h3>🔑 Đổi Mật Khẩu Quản Trị Viên</h3>
+                    <button class="close-btn" onclick="closeChangePasswordDialog()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="changePasswordForm">
+                        <div class="form-group">
+                            <label for="currentPassword">Mật khẩu hiện tại</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">🔒</span>
+                                <input type="password" id="currentPassword" placeholder="Nhập mật khẩu hiện tại" required autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="newPassword">Mật khẩu mới</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">🔑</span>
+                                <input type="password" id="newPassword" placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)" required autocomplete="off">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="confirmPassword">Xác nhận mật khẩu mới</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">✔️</span>
+                                <input type="password" id="confirmPassword" placeholder="Nhập lại mật khẩu mới" required autocomplete="off">
+                            </div>
+                        </div>
+                        <div id="changePasswordMessage" class="message"></div>
+                        <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeChangePasswordDialog()">Hủy</button>
+                            <button type="submit" class="btn-primary">Lưu Mật Khẩu</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>

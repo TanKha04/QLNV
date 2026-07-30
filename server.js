@@ -119,6 +119,13 @@ async function initializeDatabase() {
       console.log('✅ Đã tạo tài khoản admin mặc định (admin / admin123)');
     }
 
+    // Tự động cập nhật tháng 6 cho các bảng công có tên file chứa THÁNG 06 / 06.2026
+    await connection.query(`
+      UPDATE timesheets 
+      SET month = 6 
+      WHERE (file_name LIKE '%06%' OR file_name LIKE '%THÁNG 6%') AND month != 6
+    `);
+
     console.log('✅ Database đã sẵn sàng.');
   } catch (err) {
     console.error('Lỗi khởi tạo database:', err.message);
@@ -291,6 +298,67 @@ app.get('/api/admin/users', (req, res) => {
     res.json({ 
       success: true, 
       data: results 
+    });
+  });
+});
+
+// API: Đổi mật khẩu quản trị viên (chỉ admin)
+app.post('/api/admin/change-password', (req, res) => {
+  if (!req.session.userId || req.session.role !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Bạn không có quyền truy cập' });
+  }
+
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ success: false, message: 'Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới' });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+  }
+
+  // Lấy thông tin user hiện tại từ database
+  db.query('SELECT * FROM users WHERE id = ?', [req.session.userId], (err, results) => {
+    if (err) {
+      console.error('Lỗi truy vấn người dùng:', err.message);
+      return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+    }
+
+    const user = results[0];
+
+    // Kiểm tra mật khẩu hiện tại
+    bcrypt.compare(currentPassword, user.password, (err, isMatch) => {
+      if (err) {
+        console.error('Lỗi so sánh mật khẩu:', err.message);
+        return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      }
+
+      if (!isMatch) {
+        return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+      }
+
+      // Mã hóa mật khẩu mới
+      bcrypt.hash(newPassword, 10, (err, hashedPassword) => {
+        if (err) {
+          console.error('Lỗi mã hóa mật khẩu:', err.message);
+          return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+        }
+
+        // Cập nhật mật khẩu trong DB
+        db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, req.session.userId], (err, result) => {
+          if (err) {
+            console.error('Lỗi cập nhật mật khẩu:', err.message);
+            return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+          }
+
+          res.json({ success: true, message: 'Đổi mật khẩu thành công!' });
+        });
+      });
     });
   });
 });
@@ -509,8 +577,11 @@ app.post('/api/admin/upload-timesheet', upload.single('file'), (req, res) => {
         : row
     );
 
-    // Parse dữ liệu từ Excel
-    const parsedData = parseTimesheetData(data);
+    // Lưu tên file gốc
+    const decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+
+    // Parse dữ liệu từ Excel (truyền cả tên file để hỗ trợ bóc tách tháng/năm)
+    const parsedData = parseTimesheetData(data, decodedOriginalName);
     
     if (!parsedData.month || !parsedData.year) {
       fs.unlinkSync(req.file.path); // Xóa file
@@ -519,9 +590,6 @@ app.post('/api/admin/upload-timesheet', upload.single('file'), (req, res) => {
         message: 'Không tìm thấy thông tin tháng/năm trong file Excel' 
       });
     }
-
-    // Lưu vào database
-    const decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
     saveTimesheetToDatabase(parsedData, decodedOriginalName, req.session.userId, (err, result) => {
       if (err) {
         console.error('Lỗi lưu bảng công:', err);
@@ -891,7 +959,7 @@ app.get('/', (req, res) => {
 
 // ============= HELPER FUNCTIONS =============
 
-function parseTimesheetData(data) {
+function parseTimesheetData(data, filename = '') {
   const result = {
     month: null,
     year: null,
@@ -907,7 +975,10 @@ function parseTimesheetData(data) {
   let passwordCol = -1;
   let cccdCol = -1;
 
-  // Search summary column indices dynamically
+  let extractedMonth = null;
+  let extractedYear = null;
+
+  // Search summary column indices and month/year in header rows dynamically
   const summaryCols = {
     congCaNgay: -1,
     cnChuNhat: -1,
@@ -929,6 +1000,19 @@ function parseTimesheetData(data) {
     if (!Array.isArray(row)) continue;
 
     const rowStr = row.map(cell => cell ? String(cell).trim() : '').join(' ');
+
+    // Trích xuất tháng / năm từ các ô tiêu đề (ví dụ: "BẢNG CÔNG THÁNG 06.2026", "Tháng 06/2026", "Tháng 6")
+    if (!extractedMonth) {
+      const monthMatch = rowStr.match(/th[áa]ng\s*[:\s]*0?([1-9]|1[0-2])(?:\D+0?(20\d{2}))?/i);
+      if (monthMatch) {
+        extractedMonth = parseInt(monthMatch[1], 10);
+        if (monthMatch[2]) extractedYear = parseInt(monthMatch[2], 10);
+      }
+    }
+    if (!extractedYear) {
+      const yearMatch = rowStr.match(/(?:n[ăa]m|\/|\.|\s)\s*(20\d{2})/i);
+      if (yearMatch) extractedYear = parseInt(yearMatch[1], 10);
+    }
 
     if (headerRowIndex === -1 && row.some(cell => cell && String(cell).toUpperCase().includes('MSNV'))) {
       headerRowIndex = i;
@@ -980,6 +1064,19 @@ function parseTimesheetData(data) {
     });
   }
 
+  // 2. Nếu trong sheet không có, trích xuất từ tên file (ví dụ: BẢNG CÔNG THÁNG 06.2026.xlsx)
+  if (!extractedMonth && filename) {
+    const fileMonthMatch = filename.match(/th[áa]ng\s*[-._\s]*0?([1-9]|1[0-2])(?:\D+(20\d{2}))?/i);
+    if (fileMonthMatch) {
+      extractedMonth = parseInt(fileMonthMatch[1], 10);
+      if (!extractedYear && fileMonthMatch[2]) extractedYear = parseInt(fileMonthMatch[2], 10);
+    }
+  }
+  if (!extractedYear && filename) {
+    const fileYearMatch = filename.match(/(20\d{2})/);
+    if (fileYearMatch) extractedYear = parseInt(fileYearMatch[1], 10);
+  }
+
   if (headerRowIndex === -1) {
     throw new Error('Không tìm thấy header trong file Excel');
   }
@@ -987,8 +1084,8 @@ function parseTimesheetData(data) {
   if (dayStartCol === -1) dayStartCol = 5; // fallback
 
   const currentDate = new Date();
-  result.month = currentDate.getMonth() + 1;
-  result.year = currentDate.getFullYear();
+  result.month = extractedMonth || (currentDate.getMonth() + 1);
+  result.year = extractedYear || currentDate.getFullYear();
 
   for (let i = headerRowIndex + 1; i < data.length; i++) {
     const row = data[i];
