@@ -215,9 +215,12 @@ app.post('/api/login', (req, res) => {
   db.query(query, [username], (err, results) => {
     if (err) {
       console.error('Lỗi đăng nhập:', err.message);
+      const isMissingCloudDb = process.env.RENDER && !process.env.DB_HOST;
       return res.status(500).json({ 
         success: false, 
-        message: 'Lỗi hệ thống' 
+        message: isMissingCloudDb 
+          ? 'Chưa cấu hình biến môi trường CSDL (DB_HOST) trên Render Dashboard' 
+          : 'Lỗi kết nối CSDL (Vui lòng kiểm tra cấu hình MySQL)' 
       });
     }
 
