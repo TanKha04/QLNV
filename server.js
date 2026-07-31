@@ -50,8 +50,9 @@ const db = mysql.createPool(dbConfig);
 
 // Tự động khởi tạo database khi server khởi động lần đầu
 async function initializeDatabase() {
-  const connection = await db.promise().getConnection();
+  let connection;
   try {
+    connection = await db.promise().getConnection();
     console.log('Đã kết nối MySQL thành công.');
 
     // Tạo bảng users
@@ -130,7 +131,7 @@ async function initializeDatabase() {
   } catch (err) {
     console.error('Lỗi khởi tạo database:', err.message);
   } finally {
-    connection.release();
+    if (connection) connection.release();
   }
 }
 
