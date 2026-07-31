@@ -1041,8 +1041,18 @@ function displayUserTimesheetSummary(record) {
 
 // Hiển thị bảng tổng hợp cho nhân viên (đúng format ảnh mẫu)
 function displayEmployeeTimesheetSummary(record) {
-    document.getElementById('detailTableHeader').textContent =
-        `Bảng công chi tiết tháng ${String(record.month).padStart(2, '0')}-${record.year}`;
+    const monthStr = String(record.month).padStart(2, '0');
+    const yearStr = record.year;
+    const daysInMonth = new Date(record.year, record.month, 0).getDate();
+    const lastDayStr = String(daysInMonth).padStart(2, '0');
+
+    const detailHeaderEl = document.getElementById('detailTableHeader');
+    if (detailHeaderEl) {
+        detailHeaderEl.innerHTML = `
+            <div style="font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.3;">BẢNG CHẤM CÔNG CHI TIẾT THÁNG ${monthStr}-${yearStr}</div>
+            <div style="font-weight: 600; font-size: 12px; margin-top: 3px; opacity: 0.95; font-style: normal;">(Từ ngày 01/${monthStr}/${yearStr} đến ngày ${lastDayStr}/${monthStr}/${yearStr})</div>
+        `;
+    }
 
     let congCaNgay = 0, cnChuNhat = 0, congLe = 0, caDem = 0, congCNDem = 0, congLeDem = 0;
     let phuTroiNgay = 0, phuTroiCN = 0, phuTroiLe = 0, phuTroiDem = 0, phuTroiCNDem = 0, phuTroiLeDem = 0;
