@@ -1136,7 +1136,7 @@ function displayEmployeeTimesheetSummary(record) {
         </tr>
         <tr>
             <td class="stat-label">Công Chủ nhật đêm</td>
-            <td class="stat-value">${congCNDem ? congCNDem.toFixed(2) : ''}</td>
+            <td class="stat-value">${(congCNDem !== null && congCNDem !== undefined) ? congCNDem.toFixed(2) : (0).toFixed(2)}</td>
             <td class="stat-label">Phụ trội CN đêm</td>
             <td class="stat-value">${phuTroiCNDem.toFixed(1)}</td>
         </tr>
