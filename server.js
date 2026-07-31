@@ -10,7 +10,7 @@ const fs = require('fs');
 const dbConfig = require('./db-config');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Tạo thư mục uploads nếu chưa tồn tại
 const uploadDir = path.join(__dirname, 'uploads');
