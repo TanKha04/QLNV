@@ -1168,8 +1168,7 @@ function displayEmployeeTimesheetSummary(record) {
     detailTable.closest('table').style.display = '';
     let detailHtml = '';
 
-    // Tính số ngày thực tế trong tháng
-    const daysInMonth = new Date(record.year, record.month, 0).getDate();
+    // Sử dụng số ngày thực tế trong tháng (đã khai báo ở trên)
 
     for (let day = 1; day <= daysInMonth; day++) {
         const d = dayData[day];
