@@ -52,6 +52,8 @@ function initTables() {
 
   // Xóa bảng cũ nếu tồn tại (chỉ để phát triển)
   const dropTables = `
+    DROP TABLE IF EXISTS salary_records;
+    DROP TABLE IF EXISTS salaries;
     DROP TABLE IF EXISTS timesheet_records;
     DROP TABLE IF EXISTS timesheets;
     DROP TABLE IF EXISTS users;
@@ -151,6 +153,65 @@ function createTables(db) {
       console.error('Lỗi khi tạo bảng timesheet_records:', err.message);
     } else {
       console.log('Đã tạo bảng timesheet_records thành công.');
+    }
+  });
+
+  // Tạo bảng salaries (bảng lương)
+  const createSalariesTable = `
+    CREATE TABLE salaries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      month INT NOT NULL,
+      year INT NOT NULL,
+      file_name VARCHAR(255),
+      uploaded_by INT,
+      sheet_data LONGTEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (uploaded_by) REFERENCES users(id) ON DELETE SET NULL,
+      UNIQUE KEY unique_month_year (month, year),
+      INDEX idx_month_year (month, year)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `;
+
+  db.query(createSalariesTable, (err) => {
+    if (err) {
+      console.error('Lỗi khi tạo bảng salaries:', err.message);
+    } else {
+      console.log('Đã tạo bảng salaries thành công.');
+    }
+  });
+
+  // Tạo bảng salary_records
+  const createSalaryRecordsTable = `
+    CREATE TABLE salary_records (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      salary_id INT NOT NULL,
+      employee_id VARCHAR(50) NOT NULL,
+      employee_name VARCHAR(255) NOT NULL,
+      department VARCHAR(255),
+      position VARCHAR(255),
+      basic_salary DECIMAL(15,2) DEFAULT 0,
+      allowances DECIMAL(15,2) DEFAULT 0,
+      bonuses DECIMAL(15,2) DEFAULT 0,
+      deductions DECIMAL(15,2) DEFAULT 0,
+      total_salary DECIMAL(15,2) DEFAULT 0,
+      password VARCHAR(255),
+      cccd VARCHAR(50),
+      notes TEXT,
+      raw_data TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (salary_id) REFERENCES salaries(id) ON DELETE CASCADE,
+      INDEX idx_salary_id (salary_id),
+      INDEX idx_employee_id (employee_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  `;
+
+  db.query(createSalaryRecordsTable, (err) => {
+    if (err) {
+      console.error('Lỗi khi tạo bảng salary_records:', err.message);
+    } else {
+      console.log('Đã tạo bảng salary_records thành công.');
       // Sau khi tạo xong bảng, thêm dữ liệu mẫu
       insertSampleData(db);
     }

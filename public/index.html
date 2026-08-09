@@ -8,6 +8,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <!-- Thư viện chuyển DOCX → HTML trực tiếp trong trình duyệt (Mammoth.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+    <!-- Thư viện xem file XLSX trực tiếp trong trình duyệt (SheetJS) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -17,19 +21,19 @@
                 <div class="login-header">
                     <img src="LOGO.png" alt="TBS Group" class="login-logo">
                     <div class="company-name">CTY LEFASO TRÀ VINH</div>
-                    <h1>Hệ Thống Tra Cứu Bảng Công</h1>
+                    <h1>Hệ Thống Tra Cứu & Quản Trị Nội Bộ</h1>
                 </div>
 
                 <form id="loginForm">
                     <div class="form-group">
-                        <label for="username" id="usernameLabel">Mã Số Nhân Viên (MSNV)</label>
+                        <label for="username" id="usernameLabel">Tài Khoản / Mã Số Nhân Viên (MSNV)</label>
                         <div class="input-wrapper">
                             <span class="input-icon">👤</span>
                             <input 
                                 type="text" 
                                 id="username" 
                                 name="username" 
-                                placeholder="Nhập MSNV"
+                                placeholder="Nhập MSNV hoặc Tên đăng nhập"
                                 required
                                 autocomplete="off"
                             >
@@ -60,28 +64,140 @@
             </div>
         </div>
 
-        <!-- Trang kết quả tra cứu (User) -->
-        <div id="userResultPage" class="page">
-            <div class="result-box user-result-box">
-                <!-- Header thông tin nhân viên -->
-                <div class="user-header-info">
-                    <div class="info-row">
-                        <div class="info-col">
-                            <span class="info-title">MSNV</span>
-                            <span id="userMSNV" class="info-data"></span>
+        <!-- Trang kết quả tra cứu (User Mobile App Layout) -->
+        <div id="userResultPage" class="page user-app-page">
+            <!-- App Header Bar -->
+            <div class="mobile-app-header">
+                <div class="header-inner-container">
+                    <div class="mobile-app-header-left">
+                        <div class="tbs-logo-badge">TBS</div>
+                        <span class="mobile-app-title">LEFASO TRÀ VINH</span>
+                    </div>
+
+                    <!-- Desktop Header Nav Tabs -->
+                    <div class="desktop-header-nav">
+                        <button class="desktop-nav-btn active" data-tab="home" onclick="switchUserViewTab('home')">🏠 Trang chủ</button>
+                        <button class="desktop-nav-btn" data-tab="salary" onclick="switchUserViewTab('salary')">💵 Lương</button>
+                        <button class="desktop-nav-btn" data-tab="timesheet" onclick="switchUserViewTab('timesheet')">📊 Bảng Công</button>
+                        <button class="desktop-nav-btn" data-tab="notification" onclick="switchUserViewTab('notification')">🔔 Thông báo <span id="desktopNotifBadge" class="notif-badge" style="display: none;">0</span></button>
+                        <button class="desktop-nav-btn" data-tab="profile" onclick="switchUserViewTab('profile')">👤 Cá nhân</button>
+                    </div>
+
+                    <div class="mobile-app-header-right">
+                        <button class="btn-theme-toggle" onclick="toggleAppTheme()" title="Đổi chế độ sáng/tối">🌙</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mobile-app-body">
+
+                <!-- TAB 1: TRANG CHỦ (HOME DASHBOARD - RESPONSIVE GRID) -->
+                <div id="userHomeSection" class="mobile-section-tab">
+                    <div class="home-dashboard-grid">
+                        <!-- Left Column -->
+                        <div class="home-grid-left">
+                            <!-- Banner Card -->
+                            <div class="mobile-banner-card">
+                                <img src="/anh-cong-ty.png" alt="LEFASO TRÀ VINH TBS Group" class="banner-img" />
+                            </div>
+
+                            <!-- User Greeting Card -->
+                            <div class="mobile-greeting-card">
+                                <div class="greeting-left">
+                                    <span class="greeting-sub">Xin chào 👋</span>
+                                    <h2 id="homeUserFullName" class="greeting-name">--</h2>
+                                    <div class="greeting-msnv">MSNV: <span id="homeUserMSNV">--</span></div>
+                                </div>
+                                <div class="greeting-right">
+                                    <input type="file" id="userAvatarInput" accept="image/*" style="display: none;" onchange="handleUserAvatarUpload(event)">
+                                    <button class="btn-assistant-float" id="btnUserAvatar" onclick="document.getElementById('userAvatarInput').click()" title="Nhấn để tải/thay đổi ảnh đại diện (Avatar)">
+                                        <span id="avatarIconContent">👤</span>
+                                        <span class="avatar-camera-badge">📷</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Salary Quick Card ("Thực lãnh kỳ gần nhất") -->
+                            <div class="mobile-card mobile-salary-quick-card">
+                                <div class="card-header-row">
+                                    <span class="card-title-text">Thực lãnh kỳ gần nhất</span>
+                                    <button id="eyeToggleBtn" onclick="toggleSalaryNetVisibility()" class="btn-eye-toggle" title="Ẩn/Hiện số tiền">👁️</button>
+                                </div>
+                                <div id="homeSalaryAmount" class="salary-masked-amount">••••••••</div>
+                                <button onclick="switchUserViewTab('salary')" class="btn-mobile-pill btn-pill-green">
+                                    Xem chi tiết bảng lương
+                                </button>
+                            </div>
+
+                            <!-- Timesheet Quick Card ("Chấm công kỳ gần nhất") -->
+                            <div class="mobile-card mobile-timesheet-quick-card">
+                                <div class="card-header-row">
+                                    <span class="card-title-text">Chấm công kỳ gần nhất</span>
+                                    <span class="card-month-badge" id="homeTimesheetMonthBadge">Tháng --/----</span>
+                                </div>
+                                <div class="timesheet-metrics-grid">
+                                    <div class="metric-item">
+                                        <span class="metric-val" id="homeTotalDays">0 công</span>
+                                        <span class="metric-lbl">Công ca ngày</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-val" id="homeOvertimeHours">0.0h</span>
+                                        <span class="metric-lbl">Phụ trội</span>
+                                    </div>
+                                </div>
+                                <button onclick="switchUserViewTab('timesheet')" class="btn-mobile-pill btn-pill-outline">
+                                    Xem chi tiết bảng công
+                                </button>
+                            </div>
                         </div>
-                        <div class="info-col">
-                            <span class="info-title">HỌ VÀ TÊN</span>
-                            <span id="userFullName" class="info-data"></span>
+
+                        <!-- Right Column -->
+                        <div class="home-grid-right">
+                            <!-- Notifications Feed Card ("THÔNG BÁO MỚI NHẤT") -->
+                            <div class="mobile-card mobile-notif-feed-card">
+                                <div class="notif-feed-header">
+                                    <h3>THÔNG BÁO MỚI NHẤT</h3>
+                                </div>
+                                <div id="homeNotifList" class="notif-feed-list">
+                                    <!-- Render thông báo mới nhất -->
+                                </div>
+                            </div>
+
+                            <!-- Quick Utilities Widget Card -->
+                            <div class="mobile-card quick-widgets-card">
+                                <div class="widget-title">TIỆN ÍCH NỘI BỘ TBS GROUP</div>
+                                <div class="widget-buttons-grid">
+                                    <button class="widget-btn" onclick="switchUserViewTab('salary')">
+                                        <span class="icon">💰</span>
+                                        <span class="txt">Tra phiếu lương</span>
+                                    </button>
+                                    <button class="widget-btn" onclick="switchUserViewTab('timesheet')">
+                                        <span class="icon">📅</span>
+                                        <span class="txt">Lịch chấm công</span>
+                                    </button>
+                                    <button class="widget-btn" onclick="switchUserViewTab('notification')">
+                                        <span class="icon">📢</span>
+                                        <span class="txt">Tin tức công ty</span>
+                                    </button>
+                                    <button class="widget-btn" onclick="openSupportChat('user')">
+                                        <span class="icon">🆘</span>
+                                        <span class="txt">Yêu cầu hỗ trợ</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Bảng công của user -->
-                <div id="userTimesheetSection" class="user-timesheet-display" style="display: none;">
+                <!-- TAB 2: BẢNG CÔNG CHI TIẾT -->
+                <div id="userTimesheetSection" class="mobile-section-tab" style="display: none;">
+                    <!-- Selector Chọn Tháng -->
+                    <div class="month-selector" id="monthSelectorWrapper">
+                        <span class="month-icon">📅</span>
+                        <span class="month-label">Kỳ Tra Cứu:</span>
+                        <select id="monthSelect" class="month-select-dropdown" onchange="loadSelectedUserMonth()"></select>
+                    </div>
 
-
-                    <!-- Container 2 bảng -->
                     <div class="timesheet-container">
                         <!-- Bảng tổng hợp (trái) -->
                         <div class="summary-table-wrapper">
@@ -119,72 +235,802 @@
                     </div>
                 </div>
 
-                <div class="logout-action-container">
-                    <button onclick="logout()" class="btn-logout">
-                        ↩ Tra Cứu Khác
-                    </button>
+                <!-- TAB 3: BẢNG LƯƠNG CHI TIẾT -->
+                <div id="userSalarySection" class="mobile-section-tab" style="display: none;">
+                    <div id="salarySlipContainer" class="salary-slip"></div>
                 </div>
+
+                <!-- TAB 4: THÔNG BÁO -->
+                <div id="userNotificationSection" class="mobile-section-tab" style="display: none;">
+                    <div class="notification-box">
+                        <div class="notification-header">
+                            <h3>🔔 Lịch Sử Thay Đổi & Thông Báo Từ Quản Trị Viên</h3>
+                            <button onclick="markAllNotificationsRead()" class="btn-mark-read">✓ Đánh dấu đã đọc</button>
+                        </div>
+                        <div id="notificationList" class="notification-list">
+                            <!-- Danh sách thông báo đầy đủ -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 5: TÀI KHOẢN / CÁ NHÂN -->
+                <div id="userProfileSection" class="mobile-section-tab" style="display: none;">
+                    <div class="profile-card">
+                        <div class="profile-avatar" id="profileAvatarBox" onclick="document.getElementById('userAvatarInput').click()" title="Nhấn để tải/thay đổi ảnh đại diện (Avatar)" style="cursor: pointer; position: relative;">
+                            <span id="profileAvatarIcon">👤</span>
+                        </div>
+                        <h3 id="profileFullName" class="profile-name">--</h3>
+                        <p id="profileMSNV" class="profile-msnv">MSNV: --</p>
+                        <div class="profile-info-list">
+                            <div class="profile-info-item">
+                                <span class="lbl">Công ty:</span>
+                                <span class="val">LEFASO TRÀ VINH (TBS Group)</span>
+                            </div>
+                            <div class="profile-info-item">
+                                <span class="lbl">Trạng thái:</span>
+                                <span class="val status-active">● Đang hoạt động</span>
+                            </div>
+                        </div>
+                        <button onclick="logout()" class="btn-mobile-logout">
+                            ↩ Tra Cứu Khác / Đăng Xuất
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fixed Bottom Navigation Bar -->
+            <div class="mobile-bottom-nav">
+                <button class="bottom-nav-item active" data-tab="home" onclick="switchUserViewTab('home')">
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-label">Trang chủ</span>
+                </button>
+                <button class="bottom-nav-item" data-tab="salary" onclick="switchUserViewTab('salary')">
+                    <span class="nav-icon">💵</span>
+                    <span class="nav-label">Lương</span>
+                </button>
+                <button class="bottom-nav-item" data-tab="timesheet" onclick="switchUserViewTab('timesheet')">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-label">Bảng Công</span>
+                </button>
+                <button class="bottom-nav-item" data-tab="notification" onclick="switchUserViewTab('notification')">
+                    <span class="nav-icon">🔔</span>
+                    <span class="nav-label">Thông báo</span>
+                    <span id="notifBadge" class="bottom-nav-badge" style="display: none;">0</span>
+                </button>
+                <button class="bottom-nav-item" data-tab="profile" onclick="switchUserViewTab('profile')">
+                    <span class="nav-icon">👤</span>
+                    <span class="nav-label">Cá nhân</span>
+                </button>
             </div>
         </div>
 
-        <!-- Trang quản trị (Admin) -->
-        <div id="adminPage" class="page">
-            <div class="admin-box">
-                <div class="admin-header">
-                    <div>
-                        <h2>🎛️ Quản Trị Viên Hệ Thống</h2>
-                        <p id="adminWelcome" class="welcome-text"></p>
+        <!-- PAGE 2: QUẢN TRỊ VIÊN BẢNG CHẤM CÔNG -->
+        <div id="timesheetAdminPage" class="page">
+            <div class="sidebar-layout-wrapper">
+                <!-- LEFT SIDEBAR MENU -->
+                <div class="sidebar-menu">
+                    <div class="sidebar-header">
+                        <div class="sidebar-brand-name">CTY LEFASO TRÀ VINH</div>
+                        <div class="sidebar-role-badge">📊 QTV Bảng Chấm Công</div>
                     </div>
-                    <div class="admin-header-actions">
-                        <button onclick="showChangePasswordDialog()" class="btn-secondary">
-                            🔑 Đổi Mật Khẩu
+
+                    <div class="sidebar-nav">
+                        <button class="sidebar-link active" onclick="switchSubAdminTab('timesheet', 'files', this)">
+                            <span class="icon">📁</span>
+                            <span class="label">Quản Lý File Bảng Công</span>
                         </button>
-                        <button onclick="logout()" class="btn-logout">
-                            Đăng Xuất
+                        <button class="sidebar-link" onclick="switchSubAdminTab('timesheet', 'chat', this)">
+                            <span class="icon">💬</span>
+                            <span class="label">Chat Hỗ Trợ QTV Hệ Thống</span>
                         </button>
+                        <button class="sidebar-link" onclick="switchSubAdminTab('timesheet', 'profile', this); loadMyProfile('timesheet');">
+                            <span class="icon">👤</span>
+                            <span class="label">Hồ Sơ Cá Nhân</span>
+                        </button>
+                    </div>
+
+                    <div class="sidebar-footer">
+                        <button onclick="logout()" class="btn-sidebar-logout">🚪 Đăng Xuất</button>
                     </div>
                 </div>
 
-                <!-- Quản lý bảng công -->
-                <div id="timesheetsTab" class="tab-content active">
-                    <div class="admin-content">
-                        <div class="section-header">
-                            <h3>📊 Danh Sách Bảng Công</h3>
-                            <button class="btn-primary" onclick="showUploadDialog()">
-                                📤 Tải Lên Bảng Công Mới
+                <!-- RIGHT MAIN WORKSPACE -->
+                <div class="sidebar-main-content">
+                    <!-- TAB 1: FILES MANAGEMENT -->
+                    <div id="tsTabFiles" class="subadmin-tab-content active">
+                        <div class="dash-welcome-banner">
+                            <div class="welcome-info">
+                                <h2>📊 Quản Lý Bảng Chấm Công Nhân Viên</h2>
+                                <p>Chuyên trách tải lên file Excel Bảng Chấm Công hàng tháng, kiểm tra dữ liệu và hỗ trợ tra cứu.</p>
+                            </div>
+                            <button class="btn-hero-upload" onclick="showUploadDialog('timesheet')">
+                                📤 Tải Lên File Bảng Công Mới
                             </button>
                         </div>
 
-                        <div id="timesheetsList" class="timesheets-list"></div>
+                        <div class="dash-content-card">
+                            <div class="card-header-bar">
+                                <h3>📁 Danh Sách File Bảng Chấm Công Đã Tải Lên</h3>
+                                <span class="card-badge">Cập nhật thời gian thực</span>
+                            </div>
+                            <div id="timesheetsListSectionAdmin" class="timesheets-list"></div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: DEDICATED FULL PAGE LIVE CHAT -->
+                    <div id="tsTabChat" class="subadmin-tab-content" style="display: none;">
+                        <div class="dedicated-chat-card">
+                            <div class="chat-header-bar">
+                                <div class="chat-header-user">
+                                    <span class="online-indicator">●</span>
+                                    <h3>💬 Trò Chuyện Trực Tiếp Với Quản Trị Viên Hệ Thống</h3>
+                                </div>
+                                <span class="chat-sub-label">Giải đáp sự cố, hỗ trợ hệ thống 24/7</span>
+                            </div>
+                            <div id="tsDedicatedMessagesList" class="dedicated-chat-messages">
+                                <div class="chat-msg system">
+                                    <div class="bubble">Xin chào 👋 Bạn đang gặp khó khăn gì? Hãy nhắn tin hoặc gửi ảnh trực tiếp cho Quản Trị Viên Hệ Thống tại đây!</div>
+                                </div>
+                            </div>
+                            <div class="dedicated-chat-input-bar">
+                                <input type="file" id="tsChatImageInput" accept="image/*" style="display: none;" onchange="handleDedicatedChatImageSelect('timesheet', event)">
+                                <button type="button" class="btn-chat-attach" onclick="document.getElementById('tsChatImageInput').click()" title="Gửi hình ảnh">📷</button>
+                                <div id="tsChatPreviewThumb" class="chat-image-preview-thumb" style="display: none;">
+                                    <img id="tsChatPreviewImg" src="" alt="preview">
+                                    <button class="btn-remove-thumb" onclick="clearDedicatedChatImage('timesheet')">✕</button>
+                                </div>
+                                <input type="text" id="tsChatTextInput" placeholder="Nhập tin nhắn hỗ trợ..." onkeypress="if(event.key==='Enter') sendDedicatedChatMessage('timesheet')">
+                                <button type="button" onclick="sendDedicatedChatMessage('timesheet')" class="btn-chat-send">Gửi Tin Nhắn 🚀</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: HỒ SƠ CÁ NHÂN -->
+                    <div id="tsTabProfile" class="subadmin-tab-content" style="display: none;">
+                        <div class="profile-page-layout">
+
+                            <!-- Card 1: Ảnh đại diện + Thông tin cá nhân -->
+                            <div class="profile-info-card">
+                                <div class="profile-card-header">
+                                    <h3>👤 Thông Tin Hồ Sơ</h3>
+                                    <span class="card-badge">Cập nhật thông tin cá nhân</span>
+                                </div>
+                                <div class="profile-avatar-section">
+                                    <div class="avatar-upload-wrapper" onclick="document.getElementById('tsAvatarInput').click()" title="Nhấn để thay đổi ảnh">
+                                        <img id="tsProfileAvatar" src="LOGO.png" alt="Avatar" class="profile-avatar-img">
+                                        <div class="avatar-overlay">
+                                            <span>📷</span>
+                                            <small>Thay ảnh</small>
+                                        </div>
+                                    </div>
+                                    <input type="file" id="tsAvatarInput" accept="image/*" style="display:none" onchange="handleAvatarUpload('timesheet', this)">
+                                    <div class="avatar-info-text">
+                                        <p>💡 Nhấn vào ảnh để thay đổi</p>
+                                        <small>Hỗ trợ: JPG, PNG, WebP (tối đa 5MB)</small>
+                                    </div>
+                                </div>
+                                <form onsubmit="saveProfileInfo('timesheet', event)">
+                                    <div class="form-grid-2col">
+                                        <div class="form-group">
+                                            <label>Họ và Tên <span style="color:#ef4444">*</span></label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">👤</span>
+                                                <input type="text" id="tsProfileFullName" required placeholder="Nhập họ và tên">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Mã Số Nhân Viên (MSNV)</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🆔</span>
+                                                <input type="text" id="tsProfileEmployeeId" placeholder="Nhập MSNV">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-grid-2col">
+                                        <div class="form-group">
+                                            <label>Phòng Ban</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🏢</span>
+                                                <input type="text" id="tsProfileDepartment" placeholder="Nhập phòng ban">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Chức Vụ</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🏅</span>
+                                                <input type="text" id="tsProfilePosition" placeholder="Nhập chức vụ">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Tên Đăng Nhập</label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔑</span>
+                                            <input type="text" id="tsProfileUsername" readonly style="background:#f1f5f9;cursor:not-allowed;color:#94a3b8;">
+                                        </div>
+                                        <small style="color:#94a3b8;font-size:11px;">Ắn định nghĩa bởi Quản Trị Hệ Thống</small>
+                                    </div>
+                                    <div id="tsProfileInfoMsg" class="message"></div>
+                                    <div class="form-action-right">
+                                        <button type="submit" class="btn-hero-upload">💾 Lưu Thông Tin</button>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <!-- Card 2: Đổi mật khẩu -->
+                            <div class="profile-password-card">
+                                <div class="profile-card-header">
+                                    <h3>🔒 Đổi Mật Khẩu</h3>
+                                    <span class="card-badge">Bảo mật tài khoản</span>
+                                </div>
+                                <form onsubmit="changePasswordSecure('timesheet', event)">
+                                    <div class="form-group">
+                                        <label>Mật Khẩu Hiện Tại <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔓</span>
+                                            <input type="password" id="tsCurrentPassword" placeholder="Nhập mật khẩu hiện tại" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Mật Khẩu Mới <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔒</span>
+                                            <input type="password" id="tsNewPassword" placeholder="Ít nhất 6 ký tự" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Xác Nhận Mật Khẩu Mới <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">✔️</span>
+                                            <input type="password" id="tsConfirmPassword" placeholder="Nhập lại mật khẩu mới" required>
+                                        </div>
+                                    </div>
+                                    <div id="tsPasswordMsg" class="message"></div>
+                                    <div class="form-action-right">
+                                        <button type="submit" class="btn-hero-upload btn-danger-outline">🔒 Đổi Mật Khẩu</button>
+                                    </div>
+                                </form>
+                            </div>
+
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Modal Upload Bảng Công -->
-        <div id="uploadModal" class="modal">
-            <div class="modal-content">
+        <!-- PAGE 3: QUẢN TRỊ VIÊN BẢNG LƯƠNG -->
+        <div id="salaryAdminPage" class="page">
+            <div class="sidebar-layout-wrapper">
+                <!-- LEFT SIDEBAR MENU -->
+                <div class="sidebar-menu">
+                    <div class="sidebar-header">
+                        <img src="LOGO.png" alt="TBS Group" class="sidebar-logo">
+                        <div class="sidebar-brand-name">CTY LEFASO TRÀ VINH</div>
+                        <div class="sidebar-role-badge salary-badge">💰 QTV Bảng Lương</div>
+                    </div>
+
+                    <div class="sidebar-nav">
+                        <button class="sidebar-link active" onclick="switchSubAdminTab('salary', 'files', this)">
+                            <span class="icon">📁</span>
+                            <span class="label">Quản Lý File Bảng Lương</span>
+                        </button>
+                        <button class="sidebar-link" onclick="switchSubAdminTab('salary', 'chat', this)">
+                            <span class="icon">💬</span>
+                            <span class="label">Chat Hỗ Trợ QTV Hệ Thống</span>
+                        </button>
+                        <button class="sidebar-link" onclick="switchSubAdminTab('salary', 'profile', this); loadMyProfile('salary');">
+                            <span class="icon">👤</span>
+                            <span class="label">Hồ Sơ Cá Nhân</span>
+                        </button>
+                    </div>
+
+                    <div class="sidebar-footer">
+                        <button onclick="logout()" class="btn-sidebar-logout">🚪 Đăng Xuất</button>
+                    </div>
+                </div>
+
+                <!-- RIGHT MAIN WORKSPACE -->
+                <div class="sidebar-main-content">
+                    <!-- TAB 1: FILES MANAGEMENT -->
+                    <div id="salTabFiles" class="subadmin-tab-content active">
+                        <div class="dash-welcome-banner salary-banner">
+                            <div class="welcome-info">
+                                <h2>💰 Quản Lý Phiếu Lương Nhân Viên</h2>
+                                <p>Chuyên trách tải lên file Excel Bảng Lương hàng tháng, kiểm tra phiếu lương và hỗ trợ thu nhập.</p>
+                            </div>
+                            <button class="btn-hero-upload btn-salary-upload" onclick="showUploadDialog('salary')">
+                                📤 Tải Lên File Bảng Lương Mới
+                            </button>
+                        </div>
+
+                        <div class="dash-content-card">
+                            <div class="card-header-bar">
+                                <h3>📁 Danh Sách File Bảng Lương Đã Tải Lên</h3>
+                                <span class="card-badge">Cập nhật thời gian thực</span>
+                            </div>
+                            <div id="salariesListSectionAdmin" class="timesheets-list"></div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: DEDICATED FULL PAGE LIVE CHAT -->
+                    <div id="salTabChat" class="subadmin-tab-content" style="display: none;">
+                        <div class="dedicated-chat-card">
+                            <div class="chat-header-bar">
+                                <div class="chat-header-user">
+                                    <span class="online-indicator">●</span>
+                                    <h3>💬 Trò Chuyện Trực Tiếp Với Quản Trị Viên Hệ Thống</h3>
+                                </div>
+                                <span class="chat-sub-label">Giải đáp sự cố, hỗ trợ hệ thống 24/7</span>
+                            </div>
+                            <div id="salDedicatedMessagesList" class="dedicated-chat-messages">
+                                <div class="chat-msg system">
+                                    <div class="bubble">Xin chào 👋 Bạn đang gặp khó khăn gì? Hãy nhắn tin hoặc gửi ảnh trực tiếp cho Quản Trị Viên Hệ Thống tại đây!</div>
+                                </div>
+                            </div>
+                            <div class="dedicated-chat-input-bar">
+                                <input type="file" id="salChatImageInput" accept="image/*" style="display: none;" onchange="handleDedicatedChatImageSelect('salary', event)">
+                                <button type="button" class="btn-chat-attach" onclick="document.getElementById('salChatImageInput').click()" title="Gửi hình ảnh">📷</button>
+                                <div id="salChatPreviewThumb" class="chat-image-preview-thumb" style="display: none;">
+                                    <img id="salChatPreviewImg" src="" alt="preview">
+                                    <button class="btn-remove-thumb" onclick="clearDedicatedChatImage('salary')">✕</button>
+                                </div>
+                                <input type="text" id="salChatTextInput" placeholder="Nhập tin nhắn hỗ trợ..." onkeypress="if(event.key==='Enter') sendDedicatedChatMessage('salary')">
+                                <button type="button" onclick="sendDedicatedChatMessage('salary')" class="btn-chat-send">Gửi Tin Nhắn 🚀</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: HỒ SƠ CÁ NHÂN -->
+                    <div id="salTabProfile" class="subadmin-tab-content" style="display: none;">
+                        <div class="profile-page-layout">
+
+                            <!-- Card 1: Ảnh đại diện + Thông tin cá nhân -->
+                            <div class="profile-info-card">
+                                <div class="profile-card-header">
+                                    <h3>👤 Thông Tin Hồ Sơ</h3>
+                                    <span class="card-badge">Cập nhật thông tin cá nhân</span>
+                                </div>
+                                <div class="profile-avatar-section">
+                                    <div class="avatar-upload-wrapper" onclick="document.getElementById('salAvatarInput').click()" title="Nhấn để thay đổi ảnh">
+                                        <img id="salProfileAvatar" src="LOGO.png" alt="Avatar" class="profile-avatar-img">
+                                        <div class="avatar-overlay">
+                                            <span>📷</span>
+                                            <small>Thay ảnh</small>
+                                        </div>
+                                    </div>
+                                    <input type="file" id="salAvatarInput" accept="image/*" style="display:none" onchange="handleAvatarUpload('salary', this)">
+                                    <div class="avatar-info-text">
+                                        <p>💡 Nhấn vào ảnh để thay đổi</p>
+                                        <small>Hỗ trợ: JPG, PNG, WebP (tối đa 5MB)</small>
+                                    </div>
+                                </div>
+                                <form onsubmit="saveProfileInfo('salary', event)">
+                                    <div class="form-grid-2col">
+                                        <div class="form-group">
+                                            <label>Họ và Tên <span style="color:#ef4444">*</span></label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">👤</span>
+                                                <input type="text" id="salProfileFullName" required placeholder="Nhập họ và tên">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Mã Số Nhân Viên (MSNV)</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🆔</span>
+                                                <input type="text" id="salProfileEmployeeId" placeholder="Nhập MSNV">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-grid-2col">
+                                        <div class="form-group">
+                                            <label>Phòng Ban</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🏢</span>
+                                                <input type="text" id="salProfileDepartment" placeholder="Nhập phòng ban">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Chức Vụ</label>
+                                            <div class="input-wrapper">
+                                                <span class="input-icon">🏅</span>
+                                                <input type="text" id="salProfilePosition" placeholder="Nhập chức vụ">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Tên Đăng Nhập</label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔑</span>
+                                            <input type="text" id="salProfileUsername" readonly style="background:#f1f5f9;cursor:not-allowed;color:#94a3b8;">
+                                        </div>
+                                        <small style="color:#94a3b8;font-size:11px;">Ắn định nghĩa bởi Quản Trị Hệ Thống</small>
+                                    </div>
+                                    <div id="salProfileInfoMsg" class="message"></div>
+                                    <div class="form-action-right">
+                                        <button type="submit" class="btn-hero-upload btn-salary-upload">💾 Lưu Thông Tin</button>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <!-- Card 2: Đổi mật khẩu -->
+                            <div class="profile-password-card">
+                                <div class="profile-card-header">
+                                    <h3>🔒 Đổi Mật Khẩu</h3>
+                                    <span class="card-badge">Bảo mật tài khoản</span>
+                                </div>
+                                <form onsubmit="changePasswordSecure('salary', event)">
+                                    <div class="form-group">
+                                        <label>Mật Khẩu Hiện Tại <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔓</span>
+                                            <input type="password" id="salCurrentPassword" placeholder="Nhập mật khẩu hiện tại" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Mật Khẩu Mới <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">🔒</span>
+                                            <input type="password" id="salNewPassword" placeholder="Ít nhất 6 ký tự" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Xác Nhận Mật Khẩu Mới <span style="color:#ef4444">*</span></label>
+                                        <div class="input-wrapper">
+                                            <span class="input-icon">✔️</span>
+                                            <input type="password" id="salConfirmPassword" placeholder="Nhập lại mật khẩu mới" required>
+                                        </div>
+                                    </div>
+                                    <div id="salPasswordMsg" class="message"></div>
+                                    <div class="form-action-right">
+                                        <button type="submit" class="btn-hero-upload btn-salary-upload btn-danger-outline">🔒 Đổi Mật Khẩu</button>
+                                    </div>
+                                </form>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAGE 4: QUẢN TRỊ VIÊN HỆ THỐNG (SYSTEM ADMIN SUPER HUB) -->
+        <div id="systemAdminPage" class="page">
+            <div class="admin-box system-admin-box">
+                <div class="admin-header">
+                    <div>
+                        <h2>🛡️ Quản Trị Viên Hệ Thống (Master Hub)</h2>
+                        <p class="welcome-text">Giải quyết sự cố người dùng, phân quyền quản trị & đổi mật khẩu hệ thống</p>
+                    </div>
+                    <div class="admin-header-actions">
+                        <button onclick="showChangePasswordDialog()" class="btn-secondary">🔑 Đổi Mật Khẩu Của Tôi</button>
+                        <button onclick="logout()" class="btn-logout">Đăng Xuất</button>
+                    </div>
+                </div>
+
+                <!-- Thống kê tổng quan các Quản Trị Viên -->
+                <div class="system-stats-grid">
+                    <div class="sys-stat-card card-emerald">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="sysTimesheetAdminsCount">0</span>
+                            <span class="stat-label">QTV Bảng Chấm Công</span>
+                        </div>
+                    </div>
+                    <div class="sys-stat-card card-blue">
+                        <div class="stat-icon">💰</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="sysSalaryAdminsCount">0</span>
+                            <span class="stat-label">QTV Bảng Lương</span>
+                        </div>
+                    </div>
+                    <div class="sys-stat-card card-amber">
+                        <div class="stat-icon">💬</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="sysUnreadChatsCount">0</span>
+                            <span class="stat-label">Tin Nhắn Hỗ Trợ Mới</span>
+                        </div>
+                    </div>
+                    <div class="sys-stat-card card-purple">
+                        <div class="stat-icon">🛡️</div>
+                        <div class="stat-info">
+                            <span class="stat-number" id="sysSystemAdminsCount">0</span>
+                            <span class="stat-label">QTV Hệ Thống</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Navigation System Admin -->
+                <div class="tabs-navigation">
+                    <button class="tab-btn active" id="tabBtnSysChat" onclick="switchSysTab('chat')">💬 Live Chat Hỗ Trợ Trực Tuyến</button>
+                    <button class="tab-btn" id="tabBtnSysRole" onclick="switchSysTab('roles')">👥 Quản Lý Admin & Phân Quyền</button>
+                    <button class="tab-btn" id="tabBtnSysTimesheet" onclick="switchSysTab('timesheet')">📊 Bảng Chấm Công</button>
+                    <button class="tab-btn" id="tabBtnSysSalary" onclick="switchSysTab('salary')">💰 Bảng Lương</button>
+                </div>
+
+                <!-- SUB TAB 1: LIVE CHAT HUB -->
+                <div id="sysTabChat" class="sys-tab-content active">
+                    <div class="sys-chat-hub-container">
+                        <!-- Danh sách hội thoại (Trái) -->
+                        <div class="chat-conversations-sidebar">
+                            <div class="sidebar-search">
+                                <input type="text" id="chatSearchInput" placeholder="🔍 Tìm cuộc hội thoại..." onkeyup="filterConversations()">
+                            </div>
+                            <div id="conversationsList" class="conversations-list">
+                                <!-- Render danh sách tin nhắn -->
+                            </div>
+                        </div>
+
+                        <!-- Khung chat chính (Phải) -->
+                        <div class="chat-room-main">
+                            <div id="chatRoomHeader" class="chat-room-header">
+                                <span class="active-user-title">Chọn một cuộc hội thoại từ danh sách để bắt đầu hỗ trợ</span>
+                            </div>
+                            <div id="chatRoomMessages" class="chat-room-messages">
+                                <div class="empty-chat-placeholder">💬 Vui lòng chọn một cuộc hội thoại ở bên trái</div>
+                            </div>
+                            <div class="chat-room-input-bar">
+                                <input type="file" id="sysChatImageInput" accept="image/*" style="display: none;" onchange="handleSysChatImageSelect(event)">
+                                <button type="button" class="btn-chat-attach" onclick="document.getElementById('sysChatImageInput').click()" title="Đính kèm ảnh">📷</button>
+                                <div id="sysChatPreviewThumb" class="chat-image-preview-thumb" style="display: none;">
+                                    <img id="sysChatPreviewImg" src="" alt="preview">
+                                    <button class="btn-remove-thumb" onclick="clearSysChatImage()">✕</button>
+                                </div>
+                                <input type="text" id="sysChatTextInput" placeholder="Nhập tin nhắn trả lời..." onkeypress="if(event.key==='Enter') sendSysChatMessage()">
+                                <button type="button" onclick="sendSysChatMessage()" class="btn-chat-send">Gửi 🚀</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB TAB 2: QUẢN LÝ ADMIN & PHÂN QUYỀN -->
+                <div id="sysTabRoles" class="sys-tab-content" style="display: none;">
+                    <div class="admin-management-container">
+                        <!-- Form Gửi Thông Báo -->
+                        <div class="modern-form-card notification-card collapsed">
+                            <div class="form-card-header" onclick="toggleFormCard(this)">
+                                <div class="form-card-header-left">
+                                    <div class="form-card-icon">📢</div>
+                                    <div>
+                                        <h3 class="form-card-title">Gửi Thông Báo Cho Toàn Bộ Nhân Viên</h3>
+                                        <p class="form-card-desc">Quản trị viên hệ thống có thể <strong>gửi thông báo lịch nghỉ, thông tin công ty</strong> hoặc thay đổi nội bộ đến <strong>tất cả nhân viên</strong>.</p>
+                                    </div>
+                                </div>
+                                <button type="button" class="form-toggle-btn">
+                                    <span class="toggle-icon">▼</span>
+                                </button>
+                            </div>
+                            
+                            <div class="form-card-body">
+                                <form id="broadcastNotificationForm" onsubmit="handleBroadcastNotificationSubmit(event)">
+                                    <div class="form-row-inline">
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">TIÊU ĐỀ</label>
+                                            <input type="text" id="broadcastTitle" class="form-modern-input" placeholder="VD: Lịch nghỉ Tết Nguyên Bần" required>
+                                        </div>
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">LOẠI THÔNG BÁO</label>
+                                            <select id="broadcastType" class="form-modern-select">
+                                                <option value="info">Thông tin</option>
+                                                <option value="timesheet_update">Bảng công</option>
+                                                <option value="salary_update">Bảng lương</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-input-group">
+                                        <label class="form-input-label">NỘI DUNG</label>
+                                        <textarea id="broadcastMessage" class="form-modern-textarea" rows="4" placeholder="Nhập nội dung thông báo cho toàn bộ nhân viên..." required></textarea>
+                                    </div>
+                                    
+                                    <div class="form-file-upload-area">
+                                        <input type="file" id="broadcastAttachmentInput" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.zip" onchange="handleBroadcastAttachmentSelect(event)" style="display: none;">
+                                        <label for="broadcastAttachmentInput" class="file-upload-label">
+                                            <span class="file-upload-icon">📎</span>
+                                            <div class="file-upload-text">
+                                                <strong>Chọn tệp đính kèm</strong> hoặc kéo thả vào đây
+                                                <small>Hỗ trợ PDF, DOCX, XLSX (tối đa 10MB)</small>
+                                            </div>
+                                        </label>
+                                        <div id="broadcastAttachmentPreview" class="file-preview-item" style="display: none;">
+                                            <span class="file-preview-name">📄 Tên file</span>
+                                            <button type="button" class="file-preview-remove" onclick="clearBroadcastAttachment()">✕</button>
+                                        </div>
+                                    </div>
+                                    
+                                    <button type="submit" class="btn-modern-submit">
+                                        <span>📤</span> Gửi Thông Báo
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Form Tạo Admin Mới -->
+                        <div class="modern-form-card admin-create-card collapsed">
+                            <div class="form-card-header" onclick="toggleFormCard(this)">
+                                <div class="form-card-header-left">
+                                    <div class="form-card-icon">👤</div>
+                                    <div>
+                                        <h3 class="form-card-title">Tạo Mới Tài Khoản Quản Trị Viên</h3>
+                                        <p class="form-card-desc">Bạn có thể <strong>tạo tài khoản cho Quản trị viên bảng công, Quản trị viên bảng lương</strong> hoặc <strong>Quản trị viên hệ thống</strong> với tên đăng nhập và mật khẩu riêng.</p>
+                                    </div>
+                                </div>
+                                <button type="button" class="form-toggle-btn">
+                                    <span class="toggle-icon">▼</span>
+                                </button>
+                            </div>
+                            
+                            <div class="form-card-body">
+                                <form id="createAdminForm" onsubmit="handleCreateAdminSubmit(event)">
+                                    <div class="form-row-quad">
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">TÊN ĐĂNG NHẬP</label>
+                                            <input type="text" id="newAdminUsername" class="form-modern-input" placeholder="VD: qtv_cong1" autocomplete="username" required>
+                                        </div>
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">HỌ VÀ TÊN</label>
+                                            <input type="text" id="newAdminFullName" class="form-modern-input" placeholder="VD: Nguyễn Văn A" required>
+                                        </div>
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">MẬT KHẨU</label>
+                                            <input type="password" id="newAdminPassword" class="form-modern-input" placeholder="Nhập mật khẩu (tối thiểu 6 ký tự)" autocomplete="new-password" required>
+                                        </div>
+                                        <div class="form-input-group">
+                                            <label class="form-input-label">QUYỀN QUẢN TRỊ</label>
+                                            <select id="newAdminRole" class="form-modern-select">
+                                                <option value="timesheet_admin">📊 QTV Bảng Chấm Công</option>
+                                                <option value="salary_admin">💰 QTV Bảng Lương</option>
+                                                <option value="system_admin">🛡️ QTV Hệ Thống</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <button type="submit" class="btn-modern-submit btn-submit-create">
+                                        <span>✨</span> Tạo Tài Khoản Admin
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Danh Sách & Cấp Quyền -->
+                        <div class="admin-list-card">
+                            <h3>👥 Danh Sách Quản Trị Viên & Phân Quyền</h3>
+                            <table class="admin-table">
+                                <thead>
+                                    <tr>
+                                        <th>Ảnh</th>
+                                        <th>Tên Đăng Nhập</th>
+                                        <th>MSNV</th>
+                                        <th>Họ Và Tên</th>
+                                        <th>Chức Vụ / Phòng Ban</th>
+                                        <th>Quyền Hạn Hiện Tại</th>
+                                        <th>Ngày Tạo</th>
+                                        <th>Thao Tác Quản Lý</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adminUsersTableBody">
+                                    <!-- Render danh sách admin -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Danh Sách Thông Báo Đã Gửi -->
+                        <div class="admin-list-card" style="margin-top: 24px;">
+                            <div class="card-header-bar">
+                                <h3>📢 Danh Sách Thông Báo Đã Gửi</h3>
+                                <button onclick="loadBroadcastNotifications()" class="btn-secondary" style="padding: 8px 16px;">
+                                    🔄 Làm mới
+                                </button>
+                            </div>
+                            <div id="broadcastNotificationsList"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB TAB 3: BẢNG CHẤM CÔNG (SYSTEM ADMIN VIEW - VIEW ONLY) -->
+                <div id="sysTabTimesheet" class="sys-tab-content" style="display: none;">
+                    <div class="section-header">
+                        <h3>📊 Toàn Bộ Bảng Chấm Công Trên Hệ Thống (Xem & Rà Soát)</h3>
+                    </div>
+                    <div id="timesheetsListSystemAdmin" class="timesheets-list"></div>
+                </div>
+
+                <!-- SUB TAB 4: BẢNG LƯƠNG (SYSTEM ADMIN VIEW - VIEW ONLY) -->
+                <div id="sysTabSalary" class="sys-tab-content" style="display: none;">
+                    <div class="section-header">
+                        <h3>💰 Toàn Bộ Bảng Lương Trên Hệ Thống (Xem & Rà Soát)</h3>
+                    </div>
+                    <div id="salariesListSystemAdmin" class="timesheets-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FLOATING LIVE CHAT MODAL WIDGET (Dành cho Người Dùng & Admin Phân Khu) -->
+        <div id="userChatModal" class="user-chat-widget" style="display: none;">
+            <div class="chat-widget-header">
+                <div class="header-left">
+                    <span class="chat-status-dot">●</span>
+                    <span class="chat-widget-title">Hỗ Trợ - Quản Trị Viên Hệ Thống</span>
+                </div>
+                <button class="chat-widget-close" onclick="toggleUserChatModal()">✕</button>
+            </div>
+            <div id="userChatMessages" class="chat-widget-body">
+                <div class="chat-msg system">
+                    <div class="bubble">Xin chào 👋 Bạn đang gặp khó khăn gì? Hãy nhắn tin hoặc gửi ảnh trực tiếp cho Quản Trị Viên Hệ Thống nhé!</div>
+                </div>
+            </div>
+            <div class="chat-widget-footer">
+                <input type="file" id="userChatImageInput" accept="image/*" style="display: none;" onchange="handleUserChatImageSelect(event)">
+                <button type="button" class="btn-chat-attach" onclick="document.getElementById('userChatImageInput').click()" title="Gửi hình ảnh">📷</button>
+                <div id="userChatPreviewThumb" class="chat-image-preview-thumb" style="display: none;">
+                    <img id="userChatPreviewImg" src="" alt="preview">
+                    <button class="btn-remove-thumb" onclick="clearUserChatImage()">✕</button>
+                </div>
+                <input type="text" id="userChatTextInput" placeholder="Nhập tin nhắn..." onkeypress="if(event.key==='Enter') sendUserChatMessage()">
+                <button type="button" onclick="sendUserChatMessage()" class="btn-chat-send">🚀</button>
+            </div>
+        </div>
+
+        <!-- MODAL CHỈNH SỬA & ĐỔI MẬT KHẨU CẢ BẢN THÂN VÀ CÁC ADMIN KHÁC -->
+        <div id="replaceFileModal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 460px;">
                 <div class="modal-header">
-                    <h3>📤 Tải Lên Bảng Công Excel</h3>
-                    <button class="close-btn" onclick="closeUploadDialog()">&times;</button>
+                    <h3 id="replaceModalTitle">🔁 Thay thế file</h3>
+                    <button class="close-btn" onclick="closeReplaceModal()">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div class="upload-area" id="uploadArea">
-                        <div class="upload-icon">📁</div>
-                        <p>Kéo thả file Excel vào đây hoặc</p>
-                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display: none;">
-                        <button class="btn-select-file" onclick="document.getElementById('fileInput').click()">
-                            Chọn File Excel
-                        </button>
-                        <small class="help-text">Hỗ trợ file: .xlsx, .xls (Tối đa 10MB)</small>
-                    </div>
-                    <div id="uploadProgress" class="upload-progress" style="display: none;">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progressFill"></div>
+                    <p id="replaceModalSubtitle" style="margin-top: 0; color: #4b5563;">Chọn file Excel mới để thay thế file hiện tại</p>
+                    <form id="replaceTimesheetForm" onsubmit="handleReplaceTimesheetFileSubmit(event)" style="display: none;">
+                        <input type="hidden" id="replaceTimesheetId">
+                        <div class="form-group">
+                            <label>File Excel bảng công mới</label>
+                            <input type="file" id="replaceTimesheetFileInput" accept=".xlsx,.xls" required>
                         </div>
-                        <p id="uploadStatus">Đang tải lên...</p>
-                    </div>
-                    <div id="uploadMessage" class="message"></div>
+                        <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeReplaceModal()">Hủy</button>
+                            <button type="submit" class="btn-primary">Thay thế</button>
+                        </div>
+                    </form>
+                    <form id="replaceSalaryForm" onsubmit="handleReplaceSalaryFileSubmit(event)" style="display: none;">
+                        <input type="hidden" id="replaceSalaryId">
+                        <div class="form-group">
+                            <label>File Excel bảng lương mới</label>
+                            <input type="file" id="replaceSalaryFileInput" accept=".xlsx,.xls" required>
+                        </div>
+                        <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeReplaceModal()">Hủy</button>
+                            <button type="submit" class="btn-primary">Thay thế</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div id="adminEditAccountModal" class="modal">
+            <div class="modal-content" style="max-width: 460px;">
+                <div class="modal-header">
+                    <h3 id="editAccountModalTitle">✏️ Cập Nhật Tài Khoản Quản Trị</h3>
+                    <button class="close-btn" onclick="closeAdminEditAccountModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="adminEditAccountForm" onsubmit="handleAdminEditAccountSubmit(event)">
+                        <input type="hidden" id="editAccountId">
+                        <div class="form-group">
+                            <label>Tên đăng nhập</label>
+                            <input type="text" id="editAccountUsername" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Họ và Tên</label>
+                            <input type="text" id="editAccountFullName" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Mật khẩu mới (Để trống nếu không đổi)</label>
+                            <input type="password" id="editAccountNewPassword" placeholder="Nhập mật khẩu mới">
+                        </div>
+                        <div class="modal-footer" style="margin-top: 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeAdminEditAccountModal()">Hủy</button>
+                            <button type="submit" class="btn-primary">Lưu Thay Đổi</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
@@ -241,8 +1087,152 @@
                 </div>
             </div>
         </div>
+
+        <!-- Modal Chỉnh Sửa Tên Bảng Công -->
+        <div id="editTimesheetModal" class="modal">
+            <div class="modal-content" style="max-width: 440px;">
+                <div class="modal-header">
+                    <h3>✏️ Chỉnh Sửa Tên Bảng Công</h3>
+                    <button class="close-btn" onclick="closeEditTimesheetModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="editTimesheetForm" onsubmit="handleEditTimesheetSubmit(event)">
+                        <div class="form-group">
+                            <label for="editTimesheetName">Tên bảng công</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">📁</span>
+                                <input type="text" id="editTimesheetName" placeholder="Nhập tên bảng công" required autocomplete="off">
+                            </div>
+                            <small class="help-text">VD: Bảng công tháng 8/2026, BÃG CÔNG 06.2026, v.v.</small>
+                        </div>
+                        </div>
+                        <div id="editTimesheetMessage" class="message"></div>
+                        <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeEditTimesheetModal()">Hủy</button>
+                            <button type="submit" class="btn-primary">Lưu Thay Đổi</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Hồ Sơ & Đổi Tên / Mật Khẩu Quản Trị Viên -->
+        <div id="subAdminProfileModal" class="modal">
+            <div class="modal-content" style="max-width: 480px;">
+                <div class="modal-header">
+                    <h3>👤 Hồ Sơ & Cập Nhật Tài Khoản Quản Trị</h3>
+                    <button class="close-btn" onclick="closeSubAdminProfileModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="subAdminProfileForm" onsubmit="handleSubAdminProfileSubmit(event)">
+                        <div class="form-group">
+                            <label for="subAdminFullName">Họ và Tên Hiển Thị</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">👤</span>
+                                <input type="text" id="subAdminFullName" required placeholder="Nhập họ và tên hiển thị">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="subAdminUsername">Tên Đăng Nhập Tài Khoản</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">🔑</span>
+                                <input type="text" id="subAdminUsername" required placeholder="Nhập tên đăng nhập mới">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="subAdminNewPassword">Mật Khẩu Mới (Bỏ trống nếu giữ nguyên)</label>
+                            <div class="input-wrapper">
+                                <span class="input-icon">🔒</span>
+                                <input type="password" id="subAdminNewPassword" placeholder="Nhập mật khẩu mới (tùy chọn)">
+                            </div>
+                        </div>
+                        <div id="subAdminProfileMessage" class="message"></div>
+                        <div class="modal-footer" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button type="button" class="btn-secondary" onclick="closeSubAdminProfileModal()">Hủy</button>
+                            <button type="submit" class="btn-primary">💾 Lưu Hồ Sơ & Đổi Mật Khẩu</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Upload File Excel -->
+    <div id="uploadModal" class="modal">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <h3 id="uploadModalTitle">📤 Tải Lên File Excel</h3>
+                <button class="close-btn" onclick="closeUploadModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label style="font-weight:700; margin-bottom:10px; display:block;">Chọn File Excel</label>
+                    <div class="upload-drop-zone" id="uploadDropZone">
+                        <div class="upload-drop-icon">📂</div>
+                        <div class="upload-drop-text">Kéo thả file vào đây hoặc</div>
+                        <div style="margin-top:14px;">
+                            <label for="excelFileInput" style="display:inline-block; background:#059669; color:#fff; padding:10px 28px; border-radius:10px; cursor:pointer; font-weight:700; font-size:15px;">
+                                📂 Chọn File Excel
+                            </label>
+                        </div>
+                        <div class="upload-drop-hint">Hỗ trợ tất cả file Excel (.xlsx, .xls) — Tối đa 50MB</div>
+                        <div class="upload-file-name" id="uploadFileName" style="display:none;"></div>
+                    </div>
+                    <input type="file" id="excelFileInput" name="file" tabindex="-1"
+                           style="opacity:0; position:fixed; top:-9999px; left:-9999px; width:1px; height:1px;">
+                </div>
+                <div id="uploadMessage" class="message" style="margin-top:12px;"></div>
+                <div style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                    <button type="button" class="btn-secondary" onclick="closeUploadModal()">Hủy</button>
+                    <button type="button" class="btn-primary" id="uploadSubmitBtn" disabled onclick="doUploadFile()">📤 Tải Lên</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Xem Chi Tiết Bảng Chấm Công (Read-Only) -->
+    <div id="viewTimesheetDetailModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 980px; width: 96%;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #065f46, #059669); color: #fff; padding: 16px 20px; border-radius: 12px 12px 0 0;">
+                <h3 id="viewTimesheetModalTitle" style="margin: 0; color: #fff; font-size: 16px;">📊 Chi Tiết Bảng Chấm Công</h3>
+                <button class="close-btn" onclick="closeViewTimesheetDetailModal()" style="color: #fff;">&times;</button>
+            </div>
+            <div class="modal-body detail-modal-body" style="padding: 20px; max-height: 80vh; overflow: auto;">
+                <div style="display: flex; align-items: center; justify-content: space-between; background: #dcfce7; color: #166534; padding: 10px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-bottom: 16px;">
+                    <span>✏️ Bạn có thể chỉnh sửa trực tiếp nội dung bảng công ở đây</span>
+                    <span id="viewTimesheetRecordCount" style="font-weight: 700;">0 nhân viên</span>
+                </div>
+                <div id="viewTimesheetDetailContainer" class="detail-table-scroll" style="overflow: visible; max-height: none; height: auto; min-width: 100%;"></div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc; border-top: 1px solid #e2e8f0; border-radius: 0 0 12px 12px;">
+                <button type="button" id="saveTimesheetDetailBtn" class="btn-primary" onclick="saveEditableTimesheetDetail()" style="padding: 8px 20px; font-weight: 600;">💾 Lưu thay đổi</button>
+                <button type="button" class="btn-secondary" onclick="closeViewTimesheetDetailModal()" style="padding: 8px 20px; font-weight: 600;">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Xem Chi Tiết Bảng Lương (Read-Only) -->
+    <div id="viewSalaryDetailModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 960px; width: 95%;">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0284c7, #0369a1); color: #fff; padding: 16px 20px; border-radius: 12px 12px 0 0;">
+                <h3 id="viewSalaryModalTitle" style="margin: 0; color: #fff; font-size: 16px;">💰 Chi Tiết Bảng Lương</h3>
+                <button class="close-btn" onclick="closeViewSalaryDetailModal()" style="color: #fff;">&times;</button>
+            </div>
+            <div class="modal-body detail-modal-body" style="padding: 20px; max-height: 80vh; overflow: auto;">
+                <div style="display: flex; align-items: center; justify-content: space-between; background: #e0f2fe; color: #0369a1; padding: 10px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; margin-bottom: 16px;">
+                    <span>✏️ Bạn có thể chỉnh sửa trực tiếp nội dung bảng lương ở đây</span>
+                    <span id="viewSalaryRecordCount" style="font-weight: 700;">0 nhân viên</span>
+                </div>
+                <div id="viewSalaryDetailContainer" class="detail-table-scroll" style="overflow: visible; max-height: none; height: auto; min-width: 100%;"></div>
+            </div>
+            <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: flex-end; gap: 10px; background: #f8fafc; border-top: 1px solid #e2e8f0; border-radius: 0 0 12px 12px;">
+                <button type="button" id="saveSalaryDetailBtn" class="btn-primary" onclick="saveEditableSalaryDetail()" style="padding: 8px 20px; font-weight: 600;">💾 Lưu thay đổi</button>
+                <button type="button" class="btn-secondary" onclick="closeViewSalaryDetailModal()" style="padding: 8px 20px; font-weight: 600;">Đóng</button>
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>
 </body>
 </html>
+

@@ -18,7 +18,13 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// Cấu hình multer để upload file
+// Tạo thư mục uploads/avatars nếu chưa tồn tại
+const avatarDir = path.join(__dirname, 'uploads', 'avatars');
+if (!fs.existsSync(avatarDir)) {
+  fs.mkdirSync(avatarDir, { recursive: true });
+}
+
+// Cấu hình multer để upload file Excel
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
@@ -33,15 +39,35 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    // Chỉ chấp nhận file Excel
+    cb(null, true);
+  },
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
+
+// Cấu hình multer riêng cho avatar (chỉ ảnh, tối đa 5MB)
+const avatarStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, avatarDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    const userId = req.session.userId || 'unknown';
+    cb(null, `avatar_${userId}_${Date.now()}${ext}`);
+  }
+});
+
+const uploadAvatar = multer({
+  storage: avatarStorage,
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.xlsx' || ext === '.xls') {
+    if (allowed.includes(ext)) {
       cb(null, true);
     } else {
-      cb(new Error('Chỉ chấp nhận file Excel (.xlsx, .xls)'));
+      cb(new Error('Chỉ chấp nhận file ảnh (jpg, png, webp, gif)'));
     }
   },
-  limits: { fileSize: 10 * 1024 * 1024 } // Giới hạn 10MB
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 
 
@@ -65,10 +91,30 @@ async function initializeDatabase() {
         employee_id VARCHAR(50),
         department VARCHAR(200),
         position VARCHAR(200),
-        role ENUM('admin', 'user') DEFAULT 'user',
+        role VARCHAR(50) DEFAULT 'user',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    await connection.query(`
+      ALTER TABLE users
+      MODIFY COLUMN role VARCHAR(50) DEFAULT 'user'
+    `);
+
+    // Thêm cột avatar_url nếu chưa có
+    try {
+      await connection.query(`ALTER TABLE users ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL`);
+      console.log('✅ Đã thêm cột avatar_url vào bảng users');
+    } catch (alterErr) {
+      if (!String(alterErr.message).includes('Duplicate column')) {
+        console.warn('⚠️ Không thể thêm cột avatar_url:', alterErr.message);
+      }
+    }
+
+    // Thêm cột employee_id vào users nếu chưa có (cho phép liên kết với nhân viên)
+    try {
+      await connection.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50)`);
+    } catch (e) { /* đã có */ }
 
     // Tạo bảng timesheets
     await connection.query(`
@@ -109,6 +155,104 @@ async function initializeDatabase() {
       )
     `);
 
+    // Tạo bảng salaries (bảng lương)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS salaries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        month INT NOT NULL,
+        year INT NOT NULL,
+        file_name VARCHAR(255),
+        uploaded_by INT,
+        sheet_data LONGTEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_salary_month_year (month, year)
+      )
+    `);
+
+    // Tạo bảng salary_records
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS salary_records (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        salary_id INT NOT NULL,
+        employee_id VARCHAR(50) NOT NULL,
+        employee_name VARCHAR(255) NOT NULL,
+        department VARCHAR(255),
+        position VARCHAR(255),
+        basic_salary DECIMAL(15,2) DEFAULT 0,
+        allowances DECIMAL(15,2) DEFAULT 0,
+        bonuses DECIMAL(15,2) DEFAULT 0,
+        deductions DECIMAL(15,2) DEFAULT 0,
+        total_salary DECIMAL(15,2) DEFAULT 0,
+        password VARCHAR(255),
+        cccd VARCHAR(50),
+        notes TEXT,
+        raw_data LONGTEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (salary_id) REFERENCES salaries(id) ON DELETE CASCADE
+      )
+    `);
+
+    // Tạo bảng support_messages để hỗ trợ chat/system admin
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS support_messages (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        conversation_id VARCHAR(100) NOT NULL,
+        sender_id VARCHAR(100),
+        sender_name VARCHAR(255),
+        sender_role VARCHAR(50),
+        receiver_id VARCHAR(100),
+        message TEXT,
+        image_url VARCHAR(500),
+        is_read TINYINT(1) DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_support_messages_conversation (conversation_id),
+        INDEX idx_support_messages_read (is_read)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Tạo bảng notifications nếu chưa có
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        employee_id VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'info',
+        source VARCHAR(50) DEFAULT 'system',
+        attachment_url VARCHAR(500) DEFAULT NULL,
+        attachment_name VARCHAR(255) DEFAULT NULL,
+        is_read TINYINT(1) DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_notifications_emp (employee_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    try {
+      await connection.query(`ALTER TABLE notifications ADD COLUMN source VARCHAR(50) DEFAULT 'system'`);
+    } catch (alterErr) {
+      if (!String(alterErr.message).includes('Duplicate column')) {
+        console.warn('⚠️ Không thể thêm cột source:', alterErr.message);
+      }
+    }
+
+    try {
+      await connection.query(`ALTER TABLE notifications ADD COLUMN attachment_url VARCHAR(500) DEFAULT NULL`);
+    } catch (alterErr) {
+      if (!String(alterErr.message).includes('Duplicate column')) {
+        console.warn('⚠️ Không thể thêm cột attachment_url:', alterErr.message);
+      }
+    }
+
+    try {
+      await connection.query(`ALTER TABLE notifications ADD COLUMN attachment_name VARCHAR(255) DEFAULT NULL`);
+    } catch (alterErr) {
+      if (!String(alterErr.message).includes('Duplicate column')) {
+        console.warn('⚠️ Không thể thêm cột attachment_name:', alterErr.message);
+      }
+    }
+
     // Tạo tài khoản admin mặc định nếu chưa có
     const [adminRows] = await connection.query(`SELECT id FROM users WHERE username = 'admin' LIMIT 1`);
     if (adminRows.length === 0) {
@@ -145,11 +289,20 @@ app.use(session({
   secret: 'tra-cuu-secret-key-2024',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 } // 24 giờ
+  cookie: { 
+    maxAge: 30 * 60 * 1000, // 30 phút không hoạt động sẽ tự động logout
+    httpOnly: true,
+    secure: false, // Set to true if using HTTPS
+    sameSite: 'lax'
+  },
+  rolling: true // Reset maxAge mỗi khi có request (activity)
 }));
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve avatar images
+app.use('/avatars', express.static(path.join(__dirname, 'uploads', 'avatars')));
 
 // API: Tra cứu thông tin người dùng (không cần đăng nhập)
 app.post('/api/lookup', (req, res) => {
@@ -189,6 +342,47 @@ app.post('/api/lookup', (req, res) => {
       message: 'Tra cứu thành công',
       data: results[0] 
     });
+  });
+});
+
+// API: Kiểm tra session hiện tại khi F5 / Tải lại trang
+app.get('/api/auth/me', (req, res) => {
+  if (!req.session.userId && !req.session.employeeId) {
+    return res.json({ success: false, loggedIn: false });
+  }
+
+  if (req.session.employeeId) {
+    return res.json({
+      success: true,
+      loggedIn: true,
+      data: {
+        id: req.session.employeeId,
+        employee_id: req.session.employeeId,
+        employee_name: req.session.employeeName,
+        full_name: req.session.employeeName,
+        role: 'user'
+      }
+    });
+  }
+
+  const userId = req.session.userId;
+  db.query('SELECT id, username, full_name, role, department, position FROM users WHERE id = ?', [userId], (err, results) => {
+    if (err || results.length === 0) {
+      return res.json({ success: false, loggedIn: false });
+    }
+    const user = results[0];
+    res.json({
+      success: true,
+      loggedIn: true,
+      data: user
+    });
+  });
+});
+
+// API: Đăng xuất
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true, message: 'Đã đăng xuất' });
   });
 });
 
@@ -277,7 +471,8 @@ app.post('/api/login', (req, res) => {
 // API: Lấy danh sách tất cả người dùng (chỉ admin)
 app.get('/api/admin/users', (req, res) => {
   // Kiểm tra quyền admin
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedAdminRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedAdminRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -308,7 +503,8 @@ app.get('/api/admin/users', (req, res) => {
 
 // API: Đổi mật khẩu quản trị viên (chỉ admin)
 app.post('/api/admin/change-password', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedAdminRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedAdminRoles.includes(req.session.role)) {
     return res.status(403).json({ success: false, message: 'Bạn không có quyền truy cập' });
   }
 
@@ -367,6 +563,182 @@ app.post('/api/admin/change-password', (req, res) => {
   });
 });
 
+// ============= API HỒ SƠ CÁ NHÂN QUẢN TRỊ VIÊN =============
+
+// API: Lấy thông tin hồ sơ cá nhân của admin đang đăng nhập
+app.get('/api/admin/my-profile', (req, res) => {
+  const allowedRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  db.query(
+    'SELECT id, username, full_name, employee_id, department, position, role, avatar_url, created_at FROM users WHERE id = ?',
+    [req.session.userId],
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      if (results.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+      res.json({ success: true, data: results[0] });
+    }
+  );
+});
+
+// API: Cập nhật thông tin hồ sơ cá nhân
+app.post('/api/admin/update-profile', (req, res) => {
+  const allowedRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  const { full_name, employee_id, department, position } = req.body;
+
+  if (!full_name || !full_name.trim()) {
+    return res.status(400).json({ success: false, message: 'Họ và tên không được để trống' });
+  }
+
+  db.query(
+    'UPDATE users SET full_name = ?, employee_id = ?, department = ?, position = ? WHERE id = ?',
+    [full_name.trim(), employee_id || '', department || '', position || '', req.session.userId],
+    (err) => {
+      if (err) {
+        console.error('Lỗi cập nhật hồ sơ:', err.message);
+        return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      }
+      res.json({ success: true, message: 'Đã cập nhật thông tin hồ sơ thành công!' });
+    }
+  );
+});
+
+// API: Đổi mật khẩu có xác minh mật khẩu hiện tại
+app.post('/api/admin/change-password-secure', (req, res) => {
+  const allowedRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  const { current_password, new_password, confirm_password } = req.body;
+
+  if (!current_password || !new_password || !confirm_password) {
+    return res.status(400).json({ success: false, message: 'Vui lòng điền đầy đủ thông tin' });
+  }
+
+  if (new_password !== confirm_password) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu xác nhận không khớp' });
+  }
+
+  if (new_password.length < 6) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+  }
+
+  db.query('SELECT password FROM users WHERE id = ?', [req.session.userId], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    if (results.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản' });
+
+    bcrypt.compare(current_password, results[0].password, (err, isMatch) => {
+      if (err) return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      if (!isMatch) return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+
+      bcrypt.hash(new_password, 10, (err, hashed) => {
+        if (err) return res.status(500).json({ success: false, message: 'Lỗi mã hóa mật khẩu' });
+
+        db.query('UPDATE users SET password = ? WHERE id = ?', [hashed, req.session.userId], (err) => {
+          if (err) return res.status(500).json({ success: false, message: 'Lỗi lưu mật khẩu' });
+          res.json({ success: true, message: 'Đổi mật khẩu thành công! Vui lòng đăng nhập lại.' });
+        });
+      });
+    });
+  });
+});
+
+// API: Upload avatar
+app.post('/api/admin/upload-avatar', uploadAvatar.single('avatar'), (req, res) => {
+  const allowedRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file ảnh' });
+  }
+
+  const avatarUrl = '/avatars/' + req.file.filename;
+
+  // Xóa avatar cũ nếu có
+  db.query('SELECT avatar_url FROM users WHERE id = ?', [req.session.userId], (err, results) => {
+    if (!err && results.length > 0 && results[0].avatar_url) {
+      const oldFile = path.join(__dirname, 'uploads', 'avatars', path.basename(results[0].avatar_url));
+      if (fs.existsSync(oldFile)) {
+        fs.unlink(oldFile, () => {});
+      }
+    }
+
+    db.query('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, req.session.userId], (err) => {
+      if (err) {
+        console.error('Lỗi lưu avatar:', err.message);
+        return res.status(500).json({ success: false, message: 'Lỗi lưu ảnh đại diện' });
+      }
+      res.json({ success: true, message: 'Đã cập nhật ảnh đại diện!', avatar_url: avatarUrl });
+    });
+  });
+});
+
+// API: Lấy danh sách quản trị viên (chỉ system_admin / admin xem được)
+app.get('/api/admin/list-managers', (req, res) => {
+  const allowedRoles = ['admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  db.query(
+    `SELECT id, username, full_name, employee_id, department, position, role, avatar_url, created_at
+     FROM users
+     WHERE role IN ('timesheet_admin', 'salary_admin', 'admin', 'system_admin')
+     ORDER BY FIELD(role, 'system_admin', 'admin', 'timesheet_admin', 'salary_admin'), full_name`,
+    [],
+    (err, results) => {
+      if (err) return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      res.json({ success: true, data: results });
+    }
+  );
+});
+
+// API: Tự cập nhật tài khoản (tương thích ngược)
+app.post('/api/admin/self-update-account', (req, res) => {
+  const allowedRoles = ['admin', 'system_admin', 'timesheet_admin', 'salary_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  const { full_name, new_password } = req.body;
+
+  if (!full_name) {
+    return res.status(400).json({ success: false, message: 'Họ tên không được để trống' });
+  }
+
+  const doUpdate = (hashedPwd) => {
+    const fields = hashedPwd
+      ? 'full_name = ?, password = ?'
+      : 'full_name = ?';
+    const params = hashedPwd
+      ? [full_name, hashedPwd, req.session.userId]
+      : [full_name, req.session.userId];
+
+    db.query(`UPDATE users SET ${fields} WHERE id = ?`, params, (err) => {
+      if (err) return res.status(500).json({ success: false, message: 'Lỗi cập nhật' });
+      res.json({ success: true, message: 'Cập nhật thành công!' });
+    });
+  };
+
+  if (new_password) {
+    bcrypt.hash(new_password, 10, (err, hashed) => {
+      if (err) return res.status(500).json({ success: false, message: 'Lỗi mã hóa' });
+      doUpdate(hashed);
+    });
+  } else {
+    doUpdate(null);
+  }
+});
+
 // API: Xóa người dùng (chỉ admin)
 app.delete('/api/admin/user/:id', (req, res) => {
   if (!req.session.userId || req.session.role !== 'admin') {
@@ -394,34 +766,36 @@ app.post('/api/employee/login', (req, res) => {
     return res.status(400).json({ success: false, message: 'Vui lòng nhập MSNV/Tài khoản và Mật khẩu' });
   }
 
-  // 1. Kiểm tra tài khoản admin trong bảng users trước
-  const adminQuery = `
+  // 1. Kiểm tra tài khoản trong bảng users trước
+  const userQuery = `
     SELECT id, username, password, full_name, role, department, position 
     FROM users 
-    WHERE (username = ? OR employee_id = ?) AND role = 'admin'
+    WHERE username = ? OR employee_id = ?
   `;
 
-  db.query(adminQuery, [employee_id, employee_id], (err, adminResults) => {
-    if (!err && adminResults.length > 0) {
-      const adminUser = adminResults[0];
+  db.query(userQuery, [employee_id, employee_id], (err, userResults) => {
+    if (!err && userResults.length > 0) {
+      const dbUser = userResults[0];
 
-      bcrypt.compare(password, adminUser.password, (err, isMatch) => {
+      bcrypt.compare(password, dbUser.password, (err, isMatch) => {
         if (!err && isMatch) {
-          req.session.userId = adminUser.id;
-          req.session.username = adminUser.username;
-          req.session.role = adminUser.role;
+          req.session.userId = dbUser.id;
+          req.session.username = dbUser.username;
+          req.session.role = dbUser.role;
 
           return res.json({
             success: true,
-            isAdmin: true,
-            message: 'Đăng nhập Quản trị viên thành công',
+            isAdmin: dbUser.role !== 'user',
+            message: 'Đăng nhập thành công',
             data: {
-              id: adminUser.id,
-              username: adminUser.username,
-              full_name: adminUser.full_name,
-              role: adminUser.role,
-              department: adminUser.department,
-              position: adminUser.position
+              id: dbUser.id,
+              username: dbUser.username,
+              employee_id: dbUser.username,
+              employee_name: dbUser.full_name,
+              full_name: dbUser.full_name,
+              role: dbUser.role,
+              department: dbUser.department,
+              position: dbUser.position
             }
           });
         }
@@ -434,46 +808,62 @@ app.post('/api/employee/login', (req, res) => {
   });
 
   function checkTimesheetEmployee() {
-    // Tìm record mới nhất của nhân viên trong bảng công
-    const query = `
-      SELECT tr.*, t.month, t.year, t.sheet_data
+    const timesheetQuery = `
+      SELECT tr.*, t.month, t.year
       FROM timesheet_records tr
       JOIN timesheets t ON tr.timesheet_id = t.id
       WHERE tr.employee_id = ?
       ORDER BY t.year DESC, t.month DESC
     `;
 
-    db.query(query, [employee_id], (err, records) => {
+    const salaryQuery = `
+      SELECT sr.*, s.month, s.year
+      FROM salary_records sr
+      JOIN salaries s ON sr.salary_id = s.id
+      WHERE sr.employee_id = ?
+      ORDER BY s.year DESC, s.month DESC
+    `;
+
+    db.query(timesheetQuery, [employee_id], (err, tsRecords) => {
       if (err) {
         console.error('Lỗi đăng nhập nhân viên:', err.message);
         return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
       }
 
-      if (records.length === 0) {
-        return res.status(401).json({ success: false, message: 'Tài khoản / MSNV không tồn tại trong hệ thống' });
-      }
-
-      const matched = records.find(r => r.password && String(r.password).trim() === String(password).trim());
-
-      if (!matched) {
-        return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác' });
-      }
-
-      req.session.employeeId = employee_id;
-      req.session.employeeName = matched.employee_name;
-      req.session.role = 'employee';
-
-      res.json({
-        success: true,
-        isAdmin: false,
-        message: 'Đăng nhập thành công',
-        data: {
-          employee_id: matched.employee_id,
-          employee_name: matched.employee_name,
-          department: matched.department,
-          position: matched.position,
-          role: 'employee'
+      db.query(salaryQuery, [employee_id], (err2, salRecords) => {
+        if (err2) {
+          console.error('Lỗi đăng nhập nhân viên:', err2.message);
+          return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
         }
+
+        if (tsRecords.length === 0 && salRecords.length === 0) {
+          return res.status(401).json({ success: false, message: 'Tài khoản / MSNV không tồn tại trong hệ thống' });
+        }
+
+        const allRecords = [...tsRecords, ...salRecords];
+        const matched = allRecords.find(r => r.password && String(r.password).trim() === String(password).trim());
+
+        if (!matched) {
+          return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác' });
+        }
+
+        req.session.employeeId = employee_id;
+        req.session.employeeName = matched.employee_name;
+        req.session.role = 'employee';
+
+        res.json({
+          success: true,
+          isAdmin: false,
+          message: 'Đăng nhập thành công',
+          data: {
+            employee_id: matched.employee_id,
+            employee_name: matched.employee_name,
+            full_name: matched.employee_name,
+            department: matched.department,
+            position: matched.position,
+            role: 'employee'
+          }
+        });
       });
     });
   }
@@ -520,6 +910,48 @@ app.get('/api/employee/my-timesheets', (req, res) => {
   });
 });
 
+// API: Lấy tất cả bảng lương của nhân viên đang đăng nhập
+app.get('/api/employee/my-salaries', (req, res) => {
+  if (!req.session.employeeId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const query = `
+    SELECT sr.*, s.month, s.year, s.sheet_data
+    FROM salary_records sr
+    JOIN salaries s ON sr.salary_id = s.id
+    WHERE sr.employee_id = ?
+    ORDER BY s.year DESC, s.month DESC
+  `;
+
+  db.query(query, [req.session.employeeId], (err, records) => {
+    if (err) {
+      console.error('Lỗi lấy bảng lương:', err.message);
+      return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    }
+
+    const parsed = records.map(record => {
+      let headers = [];
+      try {
+        if (record.sheet_data) {
+          const sd = JSON.parse(record.sheet_data);
+          headers = extractSalarySheetHeaders(sd);
+        }
+      } catch (e) {}
+
+      let rawRow = null;
+      try {
+        rawRow = record.raw_data ? JSON.parse(record.raw_data) : null;
+      } catch (e) {}
+
+      delete record.sheet_data;
+      return { ...record, headers, raw_row: rawRow };
+    });
+
+    res.json({ success: true, data: parsed });
+  });
+});
+
 // API: Kiểm tra session nhân viên
 app.get('/api/employee/check-session', (req, res) => {
   if (req.session.employeeId) {
@@ -533,6 +965,82 @@ app.get('/api/employee/check-session', (req, res) => {
   }
 });
 
+// Hàm tạo thông báo khi Quản trị viên thay đổi thông tin nhân viên
+function createNotification(db, employee_id, title, message, type = 'info', attachmentUrl = null, attachmentName = null) {
+  if (!employee_id) return;
+  const sql = `INSERT INTO notifications (employee_id, title, message, type, attachment_url, attachment_name) VALUES (?, ?, ?, ?, ?, ?)`;
+  db.query(sql, [employee_id, title, message, type, attachmentUrl, attachmentName], (err) => {
+    if (err) console.error('Lỗi tạo thông báo:', err.message);
+  });
+}
+
+function notifyEmployeesForTimesheet(db, timesheetId, title, message, type = 'timesheet_update') {
+  if (!timesheetId) return;
+  db.query('SELECT DISTINCT employee_id FROM timesheet_records WHERE timesheet_id = ? AND employee_id IS NOT NULL AND employee_id != ""', [timesheetId], (err, rows) => {
+    if (err || !rows) return;
+    rows.forEach(r => {
+      createNotification(db, r.employee_id, title, message, type);
+    });
+  });
+}
+
+function notifyEmployeesForSalary(db, salaryId, title, message, type = 'salary_update') {
+  if (!salaryId) return;
+  db.query('SELECT DISTINCT employee_id FROM salary_records WHERE salary_id = ? AND employee_id IS NOT NULL AND employee_id != ""', [salaryId], (err, rows) => {
+    if (err || !rows) return;
+    rows.forEach(r => {
+      createNotification(db, r.employee_id, title, message, type);
+    });
+  });
+}
+
+// API: Lấy thông báo của nhân viên đang đăng nhập (CHỈ LẤY THÔNG BÁO GỬI TỪ FORM GỬI THÔNG BÁO)
+app.get('/api/employee/notifications', (req, res) => {
+  if (!req.session.employeeId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const query = `
+    SELECT id, employee_id, title, message, type, attachment_url, attachment_name, is_read, created_at
+    FROM notifications 
+    WHERE employee_id = ? AND source = 'broadcast'
+    ORDER BY created_at DESC 
+    LIMIT 50
+  `;
+
+  db.query(query, [req.session.employeeId], (err, results) => {
+    if (err) {
+      console.error('Lỗi lấy thông báo:', err.message);
+      return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    }
+
+    const unreadCount = results.filter(n => !n.is_read).length;
+    res.json({
+      success: true,
+      unread_count: unreadCount,
+      data: results
+    });
+  });
+});
+
+// API: Đánh dấu tất cả thông báo broadcast đã đọc
+app.post('/api/employee/notifications/read', (req, res) => {
+  if (!req.session.employeeId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const query = `UPDATE notifications SET is_read = 1 WHERE employee_id = ? AND source = 'broadcast'`;
+
+  db.query(query, [req.session.employeeId], (err) => {
+    if (err) {
+      console.error('Lỗi cập nhật thông báo:', err.message);
+      return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    }
+
+    res.json({ success: true, message: 'Đã đánh dấu tất cả đã đọc' });
+  });
+});
+
 // API: Đăng xuất nhân viên
 app.post('/api/employee/logout', (req, res) => {
   req.session.employeeId = null;
@@ -544,11 +1052,18 @@ app.post('/api/employee/logout', (req, res) => {
 
 // API: Upload file Excel bảng công (chỉ admin)
 app.post('/api/admin/upload-timesheet', upload.single('file'), (req, res) => {
-  // Kiểm tra quyền admin
-  if (!req.session.userId || req.session.role !== 'admin') {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Phiên đăng nhập đã hết hạn do server vừa cập nhật. Vui lòng nhấn nút Đăng Xuất ở góc trái và đăng nhập lại!' 
+    });
+  }
+
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
-      message: 'Bạn không có quyền truy cập' 
+      message: `Tài khoản '${req.session.username}' không có quyền tải lên file này.` 
     });
   }
 
@@ -623,9 +1138,76 @@ app.post('/api/admin/upload-timesheet', upload.single('file'), (req, res) => {
   }
 });
 
+// API: Replace file Excel bảng công (admin)
+app.post('/api/admin/replace-timesheet/:id', upload.single('file'), (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn' });
+  }
+
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Bạn không có quyền thay thế file này' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel' });
+  }
+
+  try {
+    const workbook = xlsx.readFile(req.file.path, { cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rawData = xlsx.utils.sheet_to_json(worksheet, { header: 1, raw: true });
+    const data = rawData.map(row => Array.isArray(row) ? row.map(cell => {
+      if (cell instanceof Date && !isNaN(cell)) {
+        const d = String(cell.getUTCDate()).padStart(2, '0');
+        const m = String(cell.getUTCMonth() + 1).padStart(2, '0');
+        const y = cell.getUTCFullYear();
+        return `${d}/${m}/${y}`;
+      }
+      return cell;
+    }) : row);
+
+    const decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const parsedData = parseTimesheetData(data, decodedOriginalName);
+
+    db.query('SELECT month, year FROM timesheets WHERE id = ?', [req.params.id], (err, rows) => {
+      if (err || !rows || rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Không tìm thấy bảng công để thay thế' });
+      }
+
+      const targetMonth = parsedData.month || rows[0].month;
+      const targetYear = parsedData.year || rows[0].year;
+      parsedData.month = targetMonth;
+      parsedData.year = targetYear;
+
+      db.query('UPDATE timesheets SET month = ?, year = ?, file_name = ?, sheet_data = ?, uploaded_by = ? WHERE id = ?', [targetMonth, targetYear, decodedOriginalName, JSON.stringify(data), req.session.userId, req.params.id], (updateErr) => {
+        if (updateErr) {
+          return res.status(500).json({ success: false, message: 'Lỗi cập nhật bảng công' });
+        }
+        db.query('DELETE FROM timesheet_records WHERE timesheet_id = ?', [req.params.id], (delErr) => {
+          if (delErr) {
+            return res.status(500).json({ success: false, message: 'Lỗi xoá dữ liệu cũ' });
+          }
+          insertRecords(req.params.id, parsedData, decodedOriginalName, req.session.userId, (insertErr, result) => {
+            if (insertErr) {
+              return res.status(500).json({ success: false, message: insertErr.message || 'Lỗi cập nhật dữ liệu mới' });
+            }
+            res.json({ success: true, message: 'Thay thế file bảng công thành công', data: result });
+          });
+        });
+      });
+    });
+  } catch (error) {
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ success: false, message: 'Lỗi xử lý file Excel: ' + error.message });
+  }
+});
+
 // API: Lấy danh sách các bảng công (chỉ admin)
 app.get('/api/admin/timesheets', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -658,7 +1240,8 @@ app.get('/api/admin/timesheets', (req, res) => {
 
 // API: Lấy chi tiết bảng công theo ID (admin)
 app.get('/api/admin/timesheet/:id', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -685,6 +1268,12 @@ app.get('/api/admin/timesheet/:id', (req, res) => {
 
     const timesheet = timesheetResults[0];
 
+    // Parse sheet_data (full raw Excel data) để trả về cho frontend
+    let parsedSheetData = null;
+    if (timesheet.sheet_data) {
+      try { parsedSheetData = JSON.parse(timesheet.sheet_data); } catch(e) {}
+    }
+
     // Lấy chi tiết records
     db.query('SELECT * FROM timesheet_records WHERE timesheet_id = ? ORDER BY employee_name', 
       [timesheetId], 
@@ -696,16 +1285,17 @@ app.get('/api/admin/timesheet/:id', (req, res) => {
           });
         }
 
-        // Parse day_data từ JSON string
+        // Parse day_data từ JSON string (an toàn với null)
         records = records.map(record => ({
           ...record,
-          day_data: JSON.parse(record.day_data)
+          day_data: record.day_data ? (() => { try { return JSON.parse(record.day_data); } catch(e) { return {}; } })() : {}
         }));
 
         res.json({ 
           success: true, 
           data: {
             timesheet,
+            sheet_data: parsedSheetData,
             records
           }
         });
@@ -716,7 +1306,8 @@ app.get('/api/admin/timesheet/:id', (req, res) => {
 
 // API: Cập nhật record trong bảng công (admin)
 app.put('/api/admin/timesheet-record/:id', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -726,52 +1317,163 @@ app.put('/api/admin/timesheet-record/:id', (req, res) => {
   const recordId = req.params.id;
   const { day_data, total_work_days, overtime_weekday, overtime_weekend, overtime_holiday, night_shift, total_salary, password, cccd, notes } = req.body;
 
-  const query = `
-    UPDATE timesheet_records 
-    SET day_data = ?, 
-        total_work_days = ?, 
-        overtime_weekday = ?,
-        overtime_weekend = ?,
-        overtime_holiday = ?,
-        night_shift = ?,
-        total_salary = ?,
-        password = ?,
-        cccd = ?,
-        notes = ?
-    WHERE id = ?
-  `;
+  db.query('SELECT tr.employee_id, tr.employee_name, t.month, t.year FROM timesheet_records tr JOIN timesheets t ON tr.timesheet_id = t.id WHERE tr.id = ?', [recordId], (err, recRows) => {
+    const query = `
+      UPDATE timesheet_records 
+      SET day_data = ?, 
+          total_work_days = ?, 
+          overtime_weekday = ?,
+          overtime_weekend = ?,
+          overtime_holiday = ?,
+          night_shift = ?,
+          total_salary = ?,
+          password = ?,
+          cccd = ?,
+          notes = ?
+      WHERE id = ?
+    `;
 
-  db.query(query, [
-    JSON.stringify(day_data),
-    total_work_days,
-    overtime_weekday,
-    overtime_weekend,
-    overtime_holiday,
-    night_shift,
-    total_salary,
-    password,
-    cccd,
-    notes,
-    recordId
-  ], (err, result) => {
-    if (err) {
-      console.error('Lỗi cập nhật record:', err.message);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Lỗi hệ thống' 
+    db.query(query, [
+      JSON.stringify(day_data),
+      total_work_days,
+      overtime_weekday,
+      overtime_weekend,
+      overtime_holiday,
+      night_shift,
+      total_salary,
+      password,
+      cccd,
+      notes,
+      recordId
+    ], (err, result) => {
+      if (err) {
+        console.error('Lỗi cập nhật record:', err.message);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Lỗi hệ thống' 
+        });
+      }
+
+      if (recRows && recRows.length > 0) {
+        const { employee_id, employee_name, month, year } = recRows[0];
+        if (employee_id) {
+          createNotification(
+            db,
+            employee_id,
+            `📊 Quản trị viên Bảng Chấm Công điều chỉnh dữ liệu của bạn`,
+            `Chi tiết điều chỉnh từ Quản trị viên Bảng Chấm Công cho Tháng ${String(month).padStart(2, '0')}/${year} (Nhân viên: ${employee_name || ''}, MSNV: ${employee_id}): Tổng ngày công: ${total_work_days || 0} công, Tăng ca ngày thường: ${overtime_weekday || 0}h, Tăng ca cuối tuần: ${overtime_weekend || 0}h, Tăng ca lễ: ${overtime_holiday || 0}h, Ca đêm: ${night_shift || 0}h.`,
+            'timesheet_update'
+          );
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Cập nhật thành công' 
       });
+    });
+  });
+});
+
+// API: Cập nhật tên file bảng công (admin)
+app.put('/api/admin/timesheet/:id/rename', (req, res) => {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Bạn không có quyền truy cập' 
+    });
+  }
+
+  const timesheetId = req.params.id;
+  const { file_name } = req.body;
+
+  if (!file_name || file_name.trim() === '') {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Vui lòng nhập tên bảng công' 
+    });
+  }
+
+  // Trích xuất tháng/năm từ tên file mới
+  let extractedMonth = null;
+  let extractedYear = null;
+
+  const fileName = file_name.trim();
+  
+  // Pattern: 07_2026, 07.2026, 07/2026, tháng 07, tháng 7, v.v.
+  const monthMatch = fileName.match(/(?:tháng\s+|thang\s+)?0?([1-9]|1[0-2])(?:[_./\s])?0?(20\d{2})?/i);
+  if (monthMatch) {
+    extractedMonth = parseInt(monthMatch[1], 10);
+    if (monthMatch[2]) {
+      extractedYear = parseInt(monthMatch[2], 10);
+    }
+  }
+  
+  // Nếu chưa tìm được năm, thử tìm năm riêng
+  if (!extractedYear) {
+    const yearMatch = fileName.match(/(20\d{2})/);
+    if (yearMatch) {
+      extractedYear = parseInt(yearMatch[1], 10);
+    }
+  }
+
+  db.query('SELECT month, year FROM timesheets WHERE id = ?', [timesheetId], (err, tsRows) => {
+    const month = extractedMonth || (tsRows && tsRows[0] ? tsRows[0].month : '');
+    const year = extractedYear || (tsRows && tsRows[0] ? tsRows[0].year : '');
+
+    // Cập nhật database
+    let updateQuery = 'UPDATE timesheets SET file_name = ?';
+    let updateParams = [fileName];
+
+    if (extractedMonth && extractedYear) {
+      updateQuery += ', month = ?, year = ?';
+      updateParams.push(extractedMonth, extractedYear);
     }
 
-    res.json({ 
-      success: true, 
-      message: 'Cập nhật thành công' 
+    updateQuery += ' WHERE id = ?';
+    updateParams.push(timesheetId);
+
+    db.query(updateQuery, updateParams, (err, result) => {
+      if (err) {
+        console.error('Lỗi cập nhật tên bảng công:', err.message);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Lỗi hệ thống' 
+        });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Không tìm thấy bảng công' 
+        });
+      }
+
+      notifyEmployeesForTimesheet(
+        db,
+        timesheetId,
+        `📊 Quản trị viên Bảng Chấm Công đổi tên Bảng Công Tháng ${month}/${year}`,
+        `Chi tiết thay đổi từ Quản trị viên Bảng Chấm Công: Bảng Chấm Công Tháng ${month}/${year} vừa được đổi tên thành "${fileName}".`,
+        'timesheet_update'
+      );
+
+      res.json({ 
+        success: true, 
+        message: 'Đã cập nhật tên bảng công thành công',
+        data: {
+          month: extractedMonth,
+          year: extractedYear
+        }
+      });
     });
   });
 });
 
 // API: Xóa bảng công (admin)
 app.delete('/api/admin/timesheet/:id', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -780,24 +1482,38 @@ app.delete('/api/admin/timesheet/:id', (req, res) => {
 
   const timesheetId = req.params.id;
 
-  db.query('DELETE FROM timesheets WHERE id = ?', [timesheetId], (err, result) => {
-    if (err) {
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Lỗi hệ thống' 
-      });
-    }
+  db.query('SELECT month, year FROM timesheets WHERE id = ?', [timesheetId], (err, tsRows) => {
+    const month = tsRows && tsRows[0] ? tsRows[0].month : '';
+    const year = tsRows && tsRows[0] ? tsRows[0].year : '';
 
-    res.json({ 
-      success: true, 
-      message: 'Đã xóa bảng công' 
+    notifyEmployeesForTimesheet(
+      db,
+      timesheetId,
+      `📊 Quản trị viên Bảng Chấm Công gỡ Bảng Công Tháng ${month}/${year}`,
+      `Chi tiết thay đổi từ Quản trị viên Bảng Chấm Công: Dữ liệu Bảng Chấm Công Tháng ${month}/${year} đã được Quản trị viên gỡ khỏi hệ thống.`,
+      'timesheet_update'
+    );
+
+    db.query('DELETE FROM timesheets WHERE id = ?', [timesheetId], (err, result) => {
+      if (err) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Lỗi hệ thống' 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Đã xóa bảng công' 
+      });
     });
   });
 });
 
 // API: Cập nhật trực tiếp sheet_data của bảng công (admin)
 app.put('/api/admin/timesheet/:id/sheet-data', (req, res) => {
-  if (!req.session.userId || req.session.role !== 'admin') {
+  const allowedRoles = ['timesheet_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
     return res.status(403).json({ 
       success: false, 
       message: 'Bạn không có quyền truy cập' 
@@ -956,6 +1672,361 @@ app.get('/api/check-session', (req, res) => {
   }
 });
 
+// ============= API BẢNG LƯƠNG (SALARIES) =============
+
+// API: Upload file Excel bảng lương (admin)
+app.post('/api/admin/upload-salary', upload.single('file'), (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ 
+      success: false, 
+      message: 'Phiên đăng nhập đã hết hạn do server vừa cập nhật. Vui lòng nhấn nút Đăng Xuất ở góc trái và đăng nhập lại!' 
+    });
+  }
+
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: `Tài khoản '${req.session.username}' không có quyền tải lên file này.` 
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Vui lòng chọn file Excel' 
+    });
+  }
+
+  try {
+    const workbook = xlsx.readFile(req.file.path, { cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rawData = xlsx.utils.sheet_to_json(worksheet, { header: 1, raw: true });
+    
+    const data = rawData.map(row =>
+      Array.isArray(row)
+        ? row.map(cell => {
+            if (cell instanceof Date && !isNaN(cell)) {
+              const d = String(cell.getUTCDate()).padStart(2, '0');
+              const m = String(cell.getUTCMonth() + 1).padStart(2, '0');
+              const y = cell.getUTCFullYear();
+              return `${d}/${m}/${y}`;
+            }
+            return cell;
+          })
+        : row
+    );
+
+    const decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const parsedData = parseSalaryData(data, decodedOriginalName);
+    
+    if (!parsedData.month || !parsedData.year) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Không tìm thấy thông tin tháng/năm trong file Excel' 
+      });
+    }
+
+    saveSalaryToDatabase(parsedData, decodedOriginalName, req.session.userId, (err, result) => {
+      if (err) {
+        console.error('Lỗi lưu bảng lương:', err);
+        fs.unlinkSync(req.file.path);
+        return res.status(500).json({ 
+          success: false, 
+          message: err.message || 'Lỗi khi lưu bảng lương' 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Upload bảng lương thành công',
+        data: result
+      });
+    });
+
+  } catch (error) {
+    console.error('Lỗi xử lý file:', error);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ 
+      success: false, 
+      message: 'Lỗi khi xử lý file Excel: ' + error.message 
+    });
+  }
+});
+
+// API: Replace file Excel bảng lương (admin)
+app.post('/api/admin/replace-salary/:id', upload.single('file'), (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn' });
+  }
+
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Bạn không có quyền thay thế file này' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel' });
+  }
+
+  try {
+    const workbook = xlsx.readFile(req.file.path, { cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rawData = xlsx.utils.sheet_to_json(worksheet, { header: 1, raw: true });
+    const data = rawData.map(row => Array.isArray(row) ? row.map(cell => {
+      if (cell instanceof Date && !isNaN(cell)) {
+        const d = String(cell.getUTCDate()).padStart(2, '0');
+        const m = String(cell.getUTCMonth() + 1).padStart(2, '0');
+        const y = cell.getUTCFullYear();
+        return `${d}/${m}/${y}`;
+      }
+      return cell;
+    }) : row);
+
+    const decodedOriginalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    const parsedData = parseSalaryData(data, decodedOriginalName);
+
+    db.query('SELECT month, year FROM salaries WHERE id = ?', [req.params.id], (err, rows) => {
+      if (err || !rows || rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Không tìm thấy bảng lương để thay thế' });
+      }
+
+      const targetMonth = parsedData.month || rows[0].month;
+      const targetYear = parsedData.year || rows[0].year;
+      parsedData.month = targetMonth;
+      parsedData.year = targetYear;
+
+      db.query('UPDATE salaries SET month = ?, year = ?, file_name = ?, sheet_data = ?, uploaded_by = ? WHERE id = ?', [targetMonth, targetYear, decodedOriginalName, JSON.stringify(data), req.session.userId, req.params.id], (updateErr) => {
+        if (updateErr) {
+          return res.status(500).json({ success: false, message: 'Lỗi cập nhật bảng lương' });
+        }
+        db.query('DELETE FROM salary_records WHERE salary_id = ?', [req.params.id], (delErr) => {
+          if (delErr) {
+            return res.status(500).json({ success: false, message: 'Lỗi xoá dữ liệu cũ' });
+          }
+          insertSalaryRecords(req.params.id, parsedData, decodedOriginalName, req.session.userId, (insertErr, result) => {
+            if (insertErr) {
+              return res.status(500).json({ success: false, message: insertErr.message || 'Lỗi cập nhật dữ liệu mới' });
+            }
+            res.json({ success: true, message: 'Thay thế file bảng lương thành công', data: result });
+          });
+        });
+      });
+    });
+  } catch (error) {
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ success: false, message: 'Lỗi xử lý file Excel: ' + error.message });
+  }
+});
+
+// API: Lấy danh sách bảng lương (admin)
+app.get('/api/admin/salaries', (req, res) => {
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Bạn không có quyền truy cập' 
+    });
+  }
+
+  const query = `
+    SELECT s.*, u.full_name as uploader_name,
+           (SELECT COUNT(*) FROM salary_records WHERE salary_id = s.id) as employee_count
+    FROM salaries s
+    LEFT JOIN users u ON s.uploaded_by = u.id
+    ORDER BY s.year DESC, s.month DESC
+  `;
+
+  db.query(query, [], (err, results) => {
+    if (err) {
+      console.error('Lỗi lấy danh sách bảng lương:', err.message);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Lỗi hệ thống' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      data: results 
+    });
+  });
+});
+
+// API: Lấy chi tiết bảng lương theo ID (Read-only cho QTV Hệ Thống & QTV Bảng Lương)
+app.get('/api/admin/salary/:id', (req, res) => {
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Bạn không có quyền truy cập' });
+  }
+
+  const salaryId = req.params.id;
+
+  db.query('SELECT * FROM salaries WHERE id = ?', [salaryId], (err, salaryResults) => {
+    if (err || salaryResults.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy bảng lương' });
+    }
+
+    const salary = salaryResults[0];
+
+    db.query('SELECT * FROM salary_records WHERE salary_id = ? ORDER BY employee_name', [salaryId], (err, records) => {
+      let parsedSheetData = null;
+      if (salary.sheet_data) {
+        try {
+          parsedSheetData = JSON.parse(salary.sheet_data);
+        } catch (e) {}
+      }
+
+      res.json({
+        success: true,
+        data: {
+          salary,
+          records: records || [],
+          sheet_data: parsedSheetData
+        }
+      });
+    });
+  });
+});
+
+// API: Cập nhật trực tiếp sheet_data của bảng lương (admin)
+app.put('/api/admin/salary/:id/sheet-data', (req, res) => {
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false,
+      message: 'Bạn không có quyền truy cập' 
+    });
+  }
+
+  const salaryId = req.params.id;
+  const { sheet_data } = req.body;
+
+  if (!sheet_data || !Array.isArray(sheet_data)) {
+    return res.status(400).json({ success: false, message: 'Dữ liệu không hợp lệ' });
+  }
+
+  db.query('UPDATE salaries SET sheet_data = ? WHERE id = ?', [JSON.stringify(sheet_data), salaryId], (err) => {
+    if (err) {
+      console.error('Lỗi cập nhật sheet_data bảng lương:', err.message);
+      return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+    }
+
+    try {
+      const parsedData = parseSalaryData(sheet_data);
+      db.query('DELETE FROM salary_records WHERE salary_id = ?', [salaryId], (err) => {
+        if (err) {
+          console.error('Lỗi xóa records cũ bảng lương:', err);
+          return res.json({ success: true, message: 'Đã lưu sheet_data' });
+        }
+
+        insertSalaryRecords(salaryId, parsedData, null, req.session.userId, (insertErr) => {
+          if (insertErr) {
+            console.error('Lỗi chèn records mới bảng lương:', insertErr);
+            return res.json({ success: true, message: 'Đã lưu sheet_data' });
+          }
+
+          res.json({ success: true, message: 'Đã tự động lưu thành công' });
+        });
+      });
+    } catch (parseError) {
+      console.error('Lỗi parse sheet_data mới bảng lương:', parseError);
+      res.json({ success: true, message: 'Đã lưu thay đổi' });
+    }
+  });
+});
+
+// API: Xóa bảng lương (admin)
+app.delete('/api/admin/salary/:id', (req, res) => {
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Bạn không có quyền truy cập' 
+    });
+  }
+
+  const salaryId = req.params.id;
+
+  db.query('SELECT month, year FROM salaries WHERE id = ?', [salaryId], (err, sRows) => {
+    const month = sRows && sRows[0] ? sRows[0].month : '';
+    const year = sRows && sRows[0] ? sRows[0].year : '';
+
+    notifyEmployeesForSalary(
+      db,
+      salaryId,
+      `💰 Quản trị viên Bảng Lương gỡ Bảng Lương Tháng ${month}/${year}`,
+      `Chi tiết thay đổi từ Quản trị viên Bảng Lương: Dữ liệu Bảng Lương Tháng ${month}/${year} đã được Quản trị viên gỡ khỏi hệ thống.`,
+      'salary_update'
+    );
+
+    db.query('DELETE FROM salaries WHERE id = ?', [salaryId], (err, result) => {
+      if (err) {
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Lỗi hệ thống' 
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Đã xóa bảng lương' 
+      });
+    });
+  });
+});
+
+// API: Cập nhật tên file bảng lương (admin)
+app.put('/api/admin/salary/:id/rename', (req, res) => {
+  const allowedRoles = ['salary_admin', 'admin', 'system_admin'];
+  if (!req.session.userId || !allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      message: 'Bạn không có quyền truy cập' 
+    });
+  }
+
+  const salaryId = req.params.id;
+  const { file_name } = req.body;
+
+  if (!file_name || file_name.trim() === '') {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Vui lòng nhập tên bảng lương' 
+    });
+  }
+
+  const fileName = file_name.trim();
+
+  db.query('SELECT month, year FROM salaries WHERE id = ?', [salaryId], (err, sRows) => {
+    const month = sRows && sRows[0] ? sRows[0].month : '';
+    const year = sRows && sRows[0] ? sRows[0].year : '';
+
+    db.query('UPDATE salaries SET file_name = ? WHERE id = ?', [fileName, salaryId], (err, result) => {
+      if (err) {
+        console.error('Lỗi cập nhật tên bảng lương:', err.message);
+        return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+      }
+
+      notifyEmployeesForSalary(
+        db,
+        salaryId,
+        `💰 Quản trị viên Bảng Lương đổi tên Bảng Lương Tháng ${month}/${year}`,
+        `Chi tiết thay đổi từ Quản trị viên Bảng Lương: Bảng Lương Tháng ${month}/${year} vừa được cập nhật tên mới thành "${fileName}".`,
+        'salary_update'
+      );
+
+      res.json({ success: true, message: 'Đã cập nhật tên bảng lương thành công' });
+    });
+  });
+});
+
+
 // Route mặc định - serve trang chủ
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -981,6 +2052,26 @@ function parseTimesheetData(data, filename = '') {
 
   let extractedMonth = null;
   let extractedYear = null;
+
+  // Trích xuất tháng/năm từ tên file TRƯỚC (độ ưu tiên cao hơn)
+  if (filename) {
+    // Pattern: 07_2026, 07.2026, 07/2026, tháng 07, tháng 7, v.v.
+    const fileMonthMatch = filename.match(/(?:tháng\s+|thang\s+)?0?([1-9]|1[0-2])(?:[_./\s])?0?(20\d{2})?/i);
+    if (fileMonthMatch) {
+      extractedMonth = parseInt(fileMonthMatch[1], 10);
+      if (fileMonthMatch[2]) {
+        extractedYear = parseInt(fileMonthMatch[2], 10);
+      }
+    }
+    
+    // Nếu chưa tìm được năm, thử tìm năm riêng
+    if (!extractedYear) {
+      const fileYearMatch = filename.match(/(20\d{2})/);
+      if (fileYearMatch) {
+        extractedYear = parseInt(fileYearMatch[1], 10);
+      }
+    }
+  }
 
   // Search summary column indices and month/year in header rows dynamically
   const summaryCols = {
@@ -1021,9 +2112,18 @@ function parseTimesheetData(data, filename = '') {
     if (headerRowIndex === -1 && row.some(cell => cell && String(cell).toUpperCase().includes('MSNV'))) {
       headerRowIndex = i;
       
-      const foundNameCol = row.findIndex(cell => cell && String(cell).toUpperCase().includes('HỌ & TÊN'));
+      const foundNameCol = row.findIndex(cell => cell && (
+        String(cell).toUpperCase().includes('HỌ & TÊN') ||
+        String(cell).toUpperCase().includes('HỌ VÀ TÊN') ||
+        String(cell).toUpperCase().includes('HO & TEN') ||
+        String(cell).toUpperCase().includes('HO VA TEN') ||
+        String(cell).toUpperCase().includes('HỌ TÊN')
+      ));
       const foundDeptCol = row.findIndex(cell => cell && String(cell).toUpperCase().includes('MÃ PHÒNG BAN'));
-      const foundPosCol = row.findIndex(cell => cell && String(cell).toUpperCase().includes('PB/PX'));
+      const foundPosCol = row.findIndex(cell => cell && (
+        String(cell).toUpperCase().includes('PB/PX') ||
+        String(cell).toUpperCase().includes('PHÒNG BAN')
+      ));
       const foundPassCol = row.findIndex(cell => cell && (String(cell).toUpperCase().includes('MẬT KHÂU') || String(cell).toUpperCase().includes('MẬT KHẨU')));
       const foundCccdCol = row.findIndex(cell => cell && String(cell).toUpperCase().includes('CCCD'));
 
@@ -1032,6 +2132,9 @@ function parseTimesheetData(data, filename = '') {
       if (foundPosCol !== -1) positionCol = foundPosCol;
       if (foundPassCol !== -1) passwordCol = foundPassCol;
       if (foundCccdCol !== -1) cccdCol = foundCccdCol;
+      
+      console.log(`[PARSE] Header found at row ${i}, nameCol=${nameCol}, deptCol=${deptCol}, positionCol=${positionCol}`);
+      console.log(`[PARSE] Header row content:`, row.slice(0, 10).map((cell, idx) => `[${idx}]=${cell}`).join(', '));
 
       for (let r = headerRowIndex; r <= headerRowIndex + 3 && r < data.length; r++) {
         const subRow = data[r];
@@ -1103,6 +2206,8 @@ function parseTimesheetData(data, filename = '') {
     const employeeName = row[nameCol] ? String(row[nameCol]).trim() : '';
     const department = row[deptCol] ? String(row[deptCol]).trim() : '';
     const position = row[positionCol] ? String(row[positionCol]).trim() : '';
+    
+    console.log(`[DEBUG] Row ${i}: ID=${employeeId}, nameCol=${nameCol}, employeeName=${employeeName}, raw row[nameCol]=${JSON.stringify(row[nameCol])}`);
     
     if (!employeeName) continue;
     
@@ -1181,6 +2286,280 @@ function parseTimesheetData(data, filename = '') {
   return result;
 }
 
+// ============= HELPER FUNCTIONS FOR SALARY =============
+
+function extractSalarySheetHeaders(sheetData) {
+  if (!Array.isArray(sheetData) || sheetData.length === 0) return [];
+
+  let headerRowIndex = -1;
+  for (let i = 0; i < Math.min(25, sheetData.length); i++) {
+    const row = sheetData[i];
+    if (Array.isArray(row) && row.some(cell => cell && String(cell).toUpperCase().includes('MSNV'))) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1) return sheetData.slice(0, 10);
+
+  let dataStartIndex = -1;
+  for (let i = headerRowIndex + 1; i < sheetData.length; i++) {
+    const row = sheetData[i];
+    if (!Array.isArray(row) || row.length < 2) continue;
+
+    const col0 = row[0] !== null && row[0] !== undefined ? String(row[0]).trim() : '';
+    const col1 = row[1] !== null && row[1] !== undefined ? String(row[1]).trim() : '';
+
+    if (!col0 || col0.toUpperCase().includes('MSNV')) continue;
+    if (!col1) continue;
+
+    const col1Upper = col1.toUpperCase();
+    if (col1Upper.includes('HỌ') && col1Upper.includes('TÊN')) continue;
+    if (col1Upper.includes('HO') && col1Upper.includes('TEN')) continue;
+
+    dataStartIndex = i;
+    break;
+  }
+
+  if (dataStartIndex === -1) dataStartIndex = headerRowIndex + 1;
+  return sheetData.slice(0, dataStartIndex);
+}
+
+function findSalaryColumnIndex(headerRows, keywords) {
+  const normalizedKeywords = keywords.map(kw =>
+    String(kw).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  );
+
+  const maxCols = Math.max(...headerRows.map(row => (Array.isArray(row) ? row.length : 0)), 0);
+
+  for (let col = 0; col < maxCols; col++) {
+    const labelParts = [];
+    for (const row of headerRows) {
+      if (!Array.isArray(row)) continue;
+      const cell = row[col];
+      if (cell !== null && cell !== undefined && String(cell).trim() !== '') {
+        labelParts.push(String(cell).trim());
+      }
+    }
+    const combined = labelParts.join(' ').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (normalizedKeywords.some(kw => combined.includes(kw))) {
+      return col;
+    }
+  }
+  return -1;
+}
+
+function parseSalaryData(data, filename = '') {
+  const result = {
+    month: null,
+    year: null,
+    raw_data: data,
+    records: []
+  };
+
+  let extractedMonth = null;
+  let extractedYear = null;
+
+  // Trích xuất tháng/năm từ tên file
+  if (filename) {
+    const fileMonthMatch = filename.match(/(?:tháng\s+|thang\s+)?0?([1-9]|1[0-2])(?:[_./\s])?0?(20\d{2})?/i);
+    if (fileMonthMatch) {
+      extractedMonth = parseInt(fileMonthMatch[1], 10);
+      if (fileMonthMatch[2]) {
+        extractedYear = parseInt(fileMonthMatch[2], 10);
+      }
+    }
+    
+    if (!extractedYear) {
+      const fileYearMatch = filename.match(/(20\d{2})/);
+      if (fileYearMatch) {
+        extractedYear = parseInt(fileYearMatch[1], 10);
+      }
+    }
+  }
+
+  // Tìm header row
+  let headerRowIndex = -1;
+  for (let i = 0; i < Math.min(25, data.length); i++) {
+    const row = data[i];
+    if (!Array.isArray(row)) continue;
+    
+    if (row.some(cell => cell && String(cell).toUpperCase().includes('MSNV'))) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1) {
+    throw new Error('Không tìm thấy header trong file Excel');
+  }
+
+  // Trích xuất tháng/năm từ nội dung sheet
+  for (let i = 0; i < headerRowIndex; i++) {
+    const row = data[i];
+    if (!Array.isArray(row)) continue;
+    const text = row.map(cell => (cell !== null && cell !== undefined ? String(cell) : '')).join(' ');
+    const match = text.match(/TH[ÁA]NG\s*0?(\d{1,2})\s*[\/.\s]\s*(20\d{2})/i);
+    if (match) {
+      extractedMonth = parseInt(match[1], 10);
+      extractedYear = parseInt(match[2], 10);
+      break;
+    }
+  }
+
+  const headerRows = extractSalarySheetHeaders(data);
+  const lcbCol = findSalaryColumnIndex(headerRows, ['lcb', 'luong co ban']);
+  const totalIncomeCol = findSalaryColumnIndex(headerRows, ['tong thu nhap']);
+  const totalDeductCol = findSalaryColumnIndex(headerRows, ['tong tru']);
+  const netCol = findSalaryColumnIndex(headerRows, ['thuc nhan', 'thuc linh', 'thuc lanh']);
+  const passwordCol = findSalaryColumnIndex(headerRows, ['mat khau', 'password']);
+  const cccdCol = findSalaryColumnIndex(headerRows, ['cccd']);
+  const deptCol = findSalaryColumnIndex(headerRows, ['phong ban', 'pb/px', 'ma phong']);
+  const positionCol = findSalaryColumnIndex(headerRows, ['chuc vu']);
+
+  const currentDate = new Date();
+  result.month = extractedMonth || (currentDate.getMonth() + 1);
+  result.year = extractedYear || currentDate.getFullYear();
+
+  const getCell = (row, col, fallbackCol) => {
+    const idx = col >= 0 ? col : fallbackCol;
+    if (idx < 0 || idx >= row.length) return '';
+    const val = row[idx];
+    return val !== null && val !== undefined ? String(val).trim() : '';
+  };
+
+  // Parse data rows
+  for (let i = headerRowIndex + 1; i < data.length; i++) {
+    const row = data[i];
+    
+    if (!Array.isArray(row) || row.length < 2) continue;
+    
+    const employeeId = row[0] ? String(row[0]).trim() : '';
+    if (!employeeId || employeeId.toUpperCase().includes('MSNV')) continue;
+    
+    const employeeName = row[1] ? String(row[1]).trim() : '';
+    if (!employeeName) continue;
+
+    const nameUpper = employeeName.toUpperCase();
+    if (nameUpper.includes('HỌ') && nameUpper.includes('TÊN')) continue;
+
+    const parseNum = (val) => (val !== undefined && val !== null && val !== '' && !isNaN(val)) ? parseFloat(val) : 0;
+
+    const basicSalaryVal = lcbCol >= 0 ? row[lcbCol] : row[3];
+    const totalSalaryVal = netCol >= 0 ? row[netCol] : (totalIncomeCol >= 0 ? row[totalIncomeCol] : row[8]);
+
+    result.records.push({
+      employee_id: employeeId,
+      employee_name: employeeName,
+      department: getCell(row, deptCol, 2),
+      position: getCell(row, positionCol, 3),
+      basic_salary: parseNum(basicSalaryVal),
+      allowances: parseNum(totalIncomeCol >= 0 ? row[totalIncomeCol] : row[5]),
+      bonuses: 0,
+      deductions: parseNum(totalDeductCol >= 0 ? row[totalDeductCol] : row[7]),
+      total_salary: parseNum(totalSalaryVal),
+      password: getCell(row, passwordCol, 9),
+      cccd: getCell(row, cccdCol, 10),
+      notes: row[11] ? String(row[11]).trim() : '',
+      raw_data: JSON.stringify(row)
+    });
+  }
+
+  return result;
+}
+
+function saveSalaryToDatabase(data, fileName, userId, callback) {
+  db.query(
+    'SELECT id FROM salaries WHERE month = ? AND year = ?',
+    [data.month, data.year],
+    (err, results) => {
+      if (err) {
+        return callback(err);
+      }
+
+      if (results.length > 0) {
+        const salaryId = results[0].id;
+        db.query('UPDATE salaries SET sheet_data = ?, file_name = ? WHERE id = ?', [JSON.stringify(data.raw_data), fileName, salaryId], (err) => {
+          if (err) return callback(err);
+          db.query('DELETE FROM salary_records WHERE salary_id = ?', [salaryId], (err) => {
+            if (err) return callback(err);
+            insertSalaryRecords(salaryId, data, fileName, userId, callback);
+          });
+        });
+      } else {
+        db.query(
+          'INSERT INTO salaries (month, year, file_name, uploaded_by, sheet_data) VALUES (?, ?, ?, ?, ?)',
+          [data.month, data.year, fileName, userId, JSON.stringify(data.raw_data)],
+          (err, result) => {
+            if (err) return callback(err);
+            
+            const salaryId = result.insertId;
+            insertSalaryRecords(salaryId, data, fileName, userId, callback);
+          }
+        );
+      }
+    }
+  );
+}
+
+function insertSalaryRecords(salaryId, data, fileName, userId, callback) {
+  if (data.records.length === 0) {
+    return callback(new Error('Không có dữ liệu nhân viên trong file Excel'));
+  }
+
+  const sql = `
+    INSERT INTO salary_records (
+      salary_id, employee_id, employee_name, department, position,
+      basic_salary, allowances, bonuses, deductions, total_salary,
+      password, cccd, notes, raw_data
+    ) VALUES ?
+  `;
+
+  const values = data.records.map(record => [
+    salaryId,
+    record.employee_id,
+    record.employee_name,
+    record.department,
+    record.position,
+    record.basic_salary,
+    record.allowances,
+    record.bonuses,
+    record.deductions,
+    record.total_salary,
+    record.password,
+    record.cccd,
+    record.notes,
+    record.raw_data
+  ]);
+
+  db.query(sql, [values], (err, result) => {
+    if (err) {
+      return callback(err);
+    }
+
+    // Tự động gửi thông báo cho từng nhân viên về sự thay đổi Bảng Lương
+    data.records.forEach(record => {
+      if (record.employee_id) {
+        const totalSalaryFormatted = record.total_salary ? new Intl.NumberFormat('vi-VN').format(record.total_salary) : '0';
+        createNotification(
+          db,
+          record.employee_id,
+          `📝 Quản trị viên cập nhật Bảng Lương Tháng ${data.month}/${data.year}`,
+          `Quản trị viên đã tải lên/điều chỉnh dữ liệu Bảng Lương Tháng ${String(data.month).padStart(2, '0')}/${data.year} cho nhân viên ${record.employee_name || ''} (MSNV: ${record.employee_id}). Lương thực nhận: ${totalSalaryFormatted} VNĐ.`,
+          'salary_update'
+        );
+      }
+    });
+
+    callback(null, {
+      salaryId: salaryId,
+      recordCount: data.records.length,
+      month: data.month,
+      year: data.year
+    });
+  });
+}
+
 // Hàm lưu timesheet vào database
 function saveTimesheetToDatabase(data, fileName, userId, callback) {
   // Kiểm tra xem bảng công tháng này đã tồn tại chưa
@@ -1195,7 +2574,7 @@ function saveTimesheetToDatabase(data, fileName, userId, callback) {
       if (results.length > 0) {
         // Nếu đã tồn tại, xóa records cũ và cập nhật
         const timesheetId = results[0].id;
-        db.query('UPDATE timesheets SET sheet_data = ? WHERE id = ?', [JSON.stringify(data.raw_data), timesheetId], (err) => {
+        db.query('UPDATE timesheets SET sheet_data = ?, file_name = ? WHERE id = ?', [JSON.stringify(data.raw_data), fileName, timesheetId], (err) => {
           if (err) return callback(err);
           db.query('DELETE FROM timesheet_records WHERE timesheet_id = ?', [timesheetId], (err) => {
             if (err) return callback(err);
@@ -1258,6 +2637,19 @@ function insertRecords(timesheetId, data, fileName, userId, callback) {
       return callback(err);
     }
 
+    // Tự động gửi thông báo cho từng nhân viên về sự thay đổi Bảng Chấm Công
+    data.records.forEach(record => {
+      if (record.employee_id) {
+        createNotification(
+          db,
+          record.employee_id,
+          `📊 Quản trị viên cập nhật Bảng Chấm Công Tháng ${data.month}/${data.year}`,
+          `Quản trị viên đã tải lên/điều chỉnh dữ liệu Bảng Chấm Công Tháng ${String(data.month).padStart(2, '0')}/${data.year} cho nhân viên ${record.employee_name || ''} (MSNV: ${record.employee_id}). Tổng ngày công: ${record.total_work_days || 0} công, Phụ trội: ${record.overtime_weekday || 0} giờ.`,
+          'timesheet_update'
+        );
+      }
+    });
+
     callback(null, {
       timesheetId,
       month: data.month,
@@ -1266,6 +2658,56 @@ function insertRecords(timesheetId, data, fileName, userId, callback) {
     });
   });
 }
+
+// API Upload file Excel Bảng Chấm Công
+app.post('/api/admin/upload-timesheet', upload.single('file'), (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const role = req.session.role;
+  if (role !== 'timesheet_admin' && role !== 'admin' && role !== 'system_admin') {
+    return res.status(403).json({ success: false, message: 'Chỉ Quản Trị Viên Bảng Chấm Công mới có quyền tải lên file này' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Chưa chọn file Excel' });
+  }
+
+  try {
+    const workbook = xlsx.readFile(req.file.path);
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const jsonData = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+    if (!jsonData || jsonData.length === 0) {
+      return res.status(400).json({ success: false, message: 'File Excel trống' });
+    }
+
+    const parsedData = parseTimesheetData(jsonData, req.file.originalname);
+    saveTimesheetToDatabase(parsedData, req.file.originalname, req.session.userId, (err, result) => {
+      if (err) {
+        console.error('Lỗi lưu Timesheet DB:', err);
+        return res.status(500).json({ success: false, message: err.message || 'Lỗi lưu CSDL' });
+      }
+      res.json({
+        success: true,
+        message: `Đã tải lên Bảng Chấm Công Tháng ${result.month}/${result.year} (${result.recordCount} nhân viên thành công)!`
+      });
+    });
+  } catch(e) {
+    console.error('Lỗi đọc file Excel:', e);
+    res.status(500).json({ success: false, message: e.message || 'Lỗi đọc file Excel' });
+  }
+});
+
+// ============= SALARY ROUTES =============
+const setupSalaryRoutes = require('./salary-routes');
+setupSalaryRoutes(app, db);
+
+// ============= SYSTEM ADMIN & LIVE SUPPORT CHAT ROUTES =============
+const setupSystemAndChatRoutes = require('./system-chat-routes');
+setupSystemAndChatRoutes(app, db);
 
 // Khởi động server
 app.listen(PORT, () => {
