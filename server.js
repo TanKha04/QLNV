@@ -116,6 +116,11 @@ async function initializeDatabase() {
       await connection.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50)`);
     } catch (e) { /* đã có */ }
 
+    // Thêm các cột thông tin nhân viên: birth_date, join_date, seniority
+    try { await connection.query(`ALTER TABLE users ADD COLUMN birth_date VARCHAR(100) DEFAULT NULL`); } catch(e) {}
+    try { await connection.query(`ALTER TABLE users ADD COLUMN join_date VARCHAR(100) DEFAULT NULL`); } catch(e) {}
+    try { await connection.query(`ALTER TABLE users ADD COLUMN seniority VARCHAR(100) DEFAULT NULL`); } catch(e) {}
+
     // Tạo bảng timesheets
     await connection.query(`
       CREATE TABLE IF NOT EXISTS timesheets (
@@ -351,31 +356,54 @@ app.get('/api/auth/me', (req, res) => {
     return res.json({ success: false, loggedIn: false });
   }
 
-  if (req.session.employeeId) {
-    return res.json({
-      success: true,
-      loggedIn: true,
-      data: {
-        id: req.session.employeeId,
-        employee_id: req.session.employeeId,
-        employee_name: req.session.employeeName,
-        full_name: req.session.employeeName,
-        role: 'user'
-      }
-    });
-  }
-
+  const queryEmpId = req.session.employeeId || req.session.username;
   const userId = req.session.userId;
-  db.query('SELECT id, username, full_name, role, department, position FROM users WHERE id = ?', [userId], (err, results) => {
-    if (err || results.length === 0) {
-      return res.json({ success: false, loggedIn: false });
+
+  const sql = userId
+    ? `SELECT id, username, employee_id, full_name, role, department, position, birth_date, join_date, seniority, avatar_url FROM users WHERE id = ?`
+    : `SELECT id, username, employee_id, full_name, role, department, position, birth_date, join_date, seniority, avatar_url FROM users WHERE username = ? OR employee_id = ?`;
+
+  const params = userId ? [userId] : [queryEmpId, queryEmpId];
+
+  db.query(sql, params, (err, results) => {
+    if (!err && results.length > 0) {
+      const user = results[0];
+      return res.json({
+        success: true,
+        loggedIn: true,
+        data: {
+          id: user.id,
+          username: user.username,
+          employee_id: user.employee_id || user.username,
+          employee_name: user.full_name,
+          full_name: user.full_name,
+          role: user.role,
+          department: user.department,
+          position: user.position,
+          birth_date: user.birth_date,
+          join_date: user.join_date,
+          seniority: user.seniority,
+          avatar_url: user.avatar_url
+        }
+      });
     }
-    const user = results[0];
-    res.json({
-      success: true,
-      loggedIn: true,
-      data: user
-    });
+
+    // Fallback if employee is logged in via timesheet session
+    if (req.session.employeeId) {
+      return res.json({
+        success: true,
+        loggedIn: true,
+        data: {
+          id: req.session.employeeId,
+          employee_id: req.session.employeeId,
+          employee_name: req.session.employeeName,
+          full_name: req.session.employeeName,
+          role: 'user'
+        }
+      });
+    }
+
+    return res.json({ success: false, loggedIn: false });
   });
 });
 
@@ -397,8 +425,8 @@ app.post('/api/login', (req, res) => {
     });
   }
 
-  // Nếu đăng nhập với quyền admin, chỉ cho phép tài khoản admin
-  const roleCondition = loginAsAdmin ? "AND role = 'admin'" : "";
+  // Nếu đăng nhập với quyền admin, cho phép tất cả các vai trò quản trị
+  const roleCondition = loginAsAdmin ? "AND role IN ('admin', 'system_admin', 'timesheet_admin', 'salary_admin')" : "";
   
   const query = `
     SELECT id, username, password, full_name, employee_id, role, department, position 
@@ -768,7 +796,7 @@ app.post('/api/employee/login', (req, res) => {
 
   // 1. Kiểm tra tài khoản trong bảng users trước
   const userQuery = `
-    SELECT id, username, password, full_name, role, department, position 
+    SELECT id, username, password, full_name, role, department, position, birth_date, join_date, seniority 
     FROM users 
     WHERE username = ? OR employee_id = ?
   `;
@@ -781,6 +809,8 @@ app.post('/api/employee/login', (req, res) => {
         if (!err && isMatch) {
           req.session.userId = dbUser.id;
           req.session.username = dbUser.username;
+          req.session.employeeId = dbUser.username || dbUser.employee_id;
+          req.session.employeeName = dbUser.full_name;
           req.session.role = dbUser.role;
 
           return res.json({
@@ -795,7 +825,10 @@ app.post('/api/employee/login', (req, res) => {
               full_name: dbUser.full_name,
               role: dbUser.role,
               department: dbUser.department,
-              position: dbUser.position
+              position: dbUser.position,
+              birth_date: dbUser.birth_date,
+              join_date: dbUser.join_date,
+              seniority: dbUser.seniority
             }
           });
         }
@@ -954,14 +987,358 @@ app.get('/api/employee/my-salaries', (req, res) => {
 
 // API: Kiểm tra session nhân viên
 app.get('/api/employee/check-session', (req, res) => {
-  if (req.session.employeeId) {
+  if (req.session.employeeId || req.session.userId) {
     res.json({
       loggedIn: true,
-      employee_id: req.session.employeeId,
+      employee_id: req.session.employeeId || req.session.username,
       employee_name: req.session.employeeName
     });
   } else {
     res.json({ loggedIn: false });
+  }
+});
+
+// API: Lấy thông tin hồ sơ nhân viên đang đăng nhập
+app.get('/api/employee/profile', (req, res) => {
+  const empId = req.session.employeeId || req.session.username;
+  const userId = req.session.userId;
+
+  if (!userId && !empId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const sql = userId
+    ? `SELECT id, username, full_name, employee_id, department, position, birth_date, join_date, seniority, avatar_url FROM users WHERE id = ?`
+    : `SELECT id, username, full_name, employee_id, department, position, birth_date, join_date, seniority, avatar_url FROM users WHERE username = ? OR employee_id = ?`;
+
+  const params = userId ? [userId] : [empId, empId];
+
+  db.query(sql, params, (err, results) => {
+    if (!err && results.length > 0) {
+      return res.json({ success: true, data: results[0] });
+    }
+    res.json({
+      success: true,
+      data: {
+        username: empId,
+        employee_id: empId,
+        full_name: req.session.employeeName || 'Nhân Viên',
+        department: '',
+        birth_date: '',
+        join_date: '',
+        seniority: ''
+      }
+    });
+  });
+});
+
+// API: Đổi mật khẩu nhân viên / người dùng
+app.post('/api/employee/change-password', (req, res) => {
+  const { current_password, new_password, confirm_password } = req.body;
+  const empId = req.session.employeeId || req.session.username;
+  const userId = req.session.userId;
+
+  if (!userId && !empId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập trước khi đổi mật khẩu' });
+  }
+
+  if (!current_password || !new_password || !confirm_password) {
+    return res.status(400).json({ success: false, message: 'Vui lòng điền đầy đủ thông tin' });
+  }
+
+  if (new_password !== confirm_password) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu xác nhận không khớp' });
+  }
+
+  if (new_password.length < 4) {
+    return res.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 4 ký tự' });
+  }
+
+  const findSql = userId
+    ? `SELECT id, username, password FROM users WHERE id = ?`
+    : `SELECT id, username, password FROM users WHERE username = ? OR employee_id = ?`;
+
+  const findParams = userId ? [userId] : [empId, empId];
+
+  db.query(findSql, findParams, (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: 'Lỗi CSDL' });
+
+    if (results.length > 0) {
+      const user = results[0];
+      bcrypt.compare(current_password, user.password, (err, isMatch) => {
+        if (err) return res.status(500).json({ success: false, message: 'Lỗi xác thực mật khẩu' });
+
+        if (!isMatch) {
+          return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+        }
+
+        bcrypt.hash(new_password, 10, (err, hashed) => {
+          if (err) return res.status(500).json({ success: false, message: 'Lỗi mã hóa mật khẩu' });
+
+          db.query(`UPDATE users SET password = ? WHERE id = ?`, [hashed, user.id], (err) => {
+            if (err) return res.status(500).json({ success: false, message: 'Lỗi cập nhật mật khẩu' });
+            res.json({ success: true, message: 'Đổi mật khẩu thành công! Mật khẩu mới của bạn đã có hiệu lực.' });
+          });
+        });
+      });
+    } else {
+      // Nếu nhân viên chưa có record trong bảng users (do đăng nhập qua timesheet_records)
+      const tsSql = `SELECT password FROM timesheet_records WHERE employee_id = ? AND password IS NOT NULL LIMIT 1`;
+      db.query(tsSql, [empId], (err, tsRows) => {
+        const existingPwd = tsRows && tsRows[0] ? String(tsRows[0].password).trim() : null;
+        if (existingPwd && existingPwd !== String(current_password).trim()) {
+          return res.status(400).json({ success: false, message: 'Mật khẩu hiện tại không chính xác' });
+        }
+
+        bcrypt.hash(new_password, 10, (err, hashed) => {
+          if (err) return res.status(500).json({ success: false, message: 'Lỗi mã hóa' });
+          const insertSql = `INSERT INTO users (username, employee_id, password, full_name, role) VALUES (?, ?, ?, ?, 'user')`;
+          db.query(insertSql, [empId, empId, hashed, req.session.employeeName || empId], (err) => {
+            if (err) return res.status(500).json({ success: false, message: 'Lỗi tạo tài khoản mới' });
+            res.json({ success: true, message: 'Đổi mật khẩu thành công! Mật khẩu mới của bạn đã có hiệu lực.' });
+          });
+        });
+      });
+    }
+  });
+});
+
+// Helper chuyển đổi ngày từ Excel cell
+function parseExcelCellDate(val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (typeof val === 'number') {
+    if (val > 10000 && val < 60000) {
+      try {
+        const dateObj = xlsx.SSF.parse_date_code(val);
+        if (dateObj) {
+          const m = String(dateObj.m).padStart(2, '0');
+          const d = String(dateObj.d).padStart(2, '0');
+          const y = dateObj.y;
+          return `${m}/${d}/${y}`;
+        }
+      } catch(e) {}
+    }
+  }
+  return String(val).trim();
+}
+
+// Helper format mật khẩu từ Excel cell
+function formatPasswordVal(val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (typeof val === 'number') {
+    let str = String(val);
+    if (str.length < 4) str = str.padStart(4, '0');
+    return str;
+  }
+  return String(val).trim();
+}
+
+// API: QTV Hệ thống Tải lên file Excel Thông Tin Nhân Viên
+app.post('/api/system-admin/upload-employees', upload.single('employee_file'), async (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const allowedRoles = ['system_admin', 'admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Bạn không có quyền thực hiện thao tác này' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel thông tin nhân viên' });
+  }
+
+  try {
+    const filePath = req.file.path;
+    const workbook = xlsx.readFile(filePath, { cellDates: false });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const jsonData = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+    if (!jsonData || jsonData.length === 0) {
+      return res.status(400).json({ success: false, message: 'File Excel trống' });
+    }
+
+    fs.unlink(filePath, () => {});
+
+    let headerRowIndex = -1;
+    let msnvCol = -1;
+    let nameCol = -1;
+    let birthCol = -1;
+    let joinCol = -1;
+    let deptCol = -1;
+    let seniorityCol = -1;
+    let passwordCol = -1;
+
+    for (let r = 0; r < Math.min(jsonData.length, 20); r++) {
+      const row = jsonData[r];
+      if (!Array.isArray(row)) continue;
+
+      row.forEach((cell, c) => {
+        const text = String(cell || '').trim().toLowerCase();
+        if (text === 'msnv' || text === 'mã nv' || text === 'mã số nv' || text === 'ma nv' || text === 'mã nhân viên') msnvCol = c;
+        if (text === 'họ và tên' || text === 'ho va ten' || text === 'họ tên' || text === 'ho ten') nameCol = c;
+        if (text === 'năm sinh' || text === 'nam sinh' || text === 'ngày sinh' || text === 'ngay sinh') birthCol = c;
+        if (text === 'ngày vào cty' || text === 'ngay vao cty' || text === 'ngày vào' || text === 'ngay vao' || text === 'ngày vào công ty') joinCol = c;
+        if (text === 'pb/px' || text === 'phòng ban' || text === 'phong ban' || text === 'phân xưởng' || text === 'pb / px') deptCol = c;
+        if (text === 'thâm niên' || text === 'tham nien') seniorityCol = c;
+        if (text === 'mật khẩu' || text === 'mat khau' || text === 'mk' || text === 'password') passwordCol = c;
+      });
+
+      if (msnvCol !== -1 && (nameCol !== -1 || passwordCol !== -1)) {
+        headerRowIndex = r;
+        break;
+      }
+    }
+
+    if (headerRowIndex === -1 || msnvCol === -1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Không tìm thấy các cột tiêu đề chuẩn trong file Excel. Yêu cầu tiêu đề gồm: MSNV, HỌ VÀ TÊN, NĂM SINH, NGÀY VÀO CTY, PB/PX, THÂM NIÊN, MẬT KHẨU.'
+      });
+    }
+
+    const employeeRows = [];
+    for (let r = headerRowIndex + 1; r < jsonData.length; r++) {
+      const row = jsonData[r];
+      if (!Array.isArray(row)) continue;
+
+      const rawMsnv = row[msnvCol];
+      if (rawMsnv === undefined || rawMsnv === null || String(rawMsnv).trim() === '') continue;
+
+      const msnv = String(rawMsnv).trim();
+      const fullName = nameCol !== -1 ? String(row[nameCol] || '').trim() : msnv;
+      const birthDate = birthCol !== -1 ? parseExcelCellDate(row[birthCol]) : '';
+      const joinDate = joinCol !== -1 ? parseExcelCellDate(row[joinCol]) : '';
+      const department = deptCol !== -1 ? String(row[deptCol] || '').trim() : '';
+      const seniority = seniorityCol !== -1 ? String(row[seniorityCol] || '').trim() : '';
+      const password = passwordCol !== -1 ? formatPasswordVal(row[passwordCol]) : msnv;
+
+      employeeRows.push({
+        msnv,
+        fullName,
+        birthDate,
+        joinDate,
+        department,
+        seniority,
+        password: password || msnv
+      });
+    }
+
+    if (employeeRows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Không tìm thấy dữ liệu nhân viên nào hợp lệ trong file Excel' });
+    }
+
+    let successCount = 0;
+
+    for (const emp of employeeRows) {
+      await new Promise((resolve) => {
+        bcrypt.hash(emp.password, 10, (err, hashedPassword) => {
+          if (err) return resolve();
+
+          db.query('SELECT id FROM users WHERE username = ? OR employee_id = ?', [emp.msnv, emp.msnv], (selectErr, existing) => {
+            if (!selectErr && existing && existing.length > 0) {
+              const updateSql = `
+                UPDATE users 
+                SET full_name = ?, birth_date = ?, join_date = ?, department = ?, seniority = ?, password = ?
+                WHERE id = ?
+              `;
+              db.query(updateSql, [emp.fullName, emp.birthDate, emp.joinDate, emp.department, emp.seniority, hashedPassword, existing[0].id], (uErr) => {
+                if (!uErr) successCount++;
+                resolve();
+              });
+            } else {
+              const insertSql = `
+                INSERT INTO users (username, employee_id, password, full_name, birth_date, join_date, department, seniority, role)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user')
+              `;
+              db.query(insertSql, [emp.msnv, emp.msnv, hashedPassword, emp.fullName, emp.birthDate, emp.joinDate, emp.department, emp.seniority], (iErr) => {
+                if (!iErr) successCount++;
+                resolve();
+              });
+            }
+          });
+        });
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Đã nhập và cập nhật thành công ${successCount}/${employeeRows.length} nhân viên vào hệ thống!`
+    });
+  } catch(e) {
+    console.error('Lỗi upload file thông tin nhân viên:', e);
+    res.status(500).json({ success: false, message: e.message || 'Lỗi đọc file Excel' });
+  }
+});
+
+// API: Lấy danh sách tất cả nhân viên (Dành cho QTV Hệ Thống)
+app.get('/api/system-admin/employees', (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const allowedRoles = ['system_admin', 'admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  const sql = `
+    SELECT id, username, employee_id, full_name, birth_date, join_date, department, seniority, created_at
+    FROM users
+    WHERE role = 'user' OR role IS NULL
+    ORDER BY created_at DESC, full_name ASC
+  `;
+
+  db.query(sql, [], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, data: results });
+  });
+});
+
+// API: Cập nhật thông tin & đổi mật khẩu cho nhân viên (Dành cho QTV Hệ Thống)
+app.post('/api/system-admin/update-employee', async (req, res) => {
+  if (!req.session || !req.session.userId) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+  }
+
+  const allowedRoles = ['system_admin', 'admin'];
+  if (!allowedRoles.includes(req.session.role)) {
+    return res.status(403).json({ success: false, message: 'Không có quyền truy cập' });
+  }
+
+  const { id, username, full_name, birth_date, join_date, department, seniority, new_password } = req.body;
+
+  if (!id && !username) {
+    return res.status(400).json({ success: false, message: 'Thiếu thông tin nhận diện nhân viên' });
+  }
+
+  try {
+    if (new_password && new_password.trim().length > 0) {
+      const hashedPassword = await bcrypt.hash(new_password.trim(), 10);
+      const sql = `
+        UPDATE users 
+        SET full_name = ?, birth_date = ?, join_date = ?, department = ?, seniority = ?, password = ?
+        WHERE id = ? OR username = ?
+      `;
+      db.query(sql, [full_name, birth_date, join_date, department, seniority, hashedPassword, id || 0, username || ''], (err, result) => {
+        if (err) return res.status(500).json({ success: false, message: err.message });
+        res.json({ success: true, message: `Đã cập nhật thông tin và đổi mật khẩu mới cho nhân viên (${username || full_name}) thành công!` });
+      });
+    } else {
+      const sql = `
+        UPDATE users 
+        SET full_name = ?, birth_date = ?, join_date = ?, department = ?, seniority = ?
+        WHERE id = ? OR username = ?
+      `;
+      db.query(sql, [full_name, birth_date, join_date, department, seniority, id || 0, username || ''], (err, result) => {
+        if (err) return res.status(500).json({ success: false, message: err.message });
+        res.json({ success: true, message: `Đã cập nhật thông tin nhân viên (${username || full_name}) thành công!` });
+      });
+    }
+  } catch (e) {
+    console.error('Lỗi cập nhật nhân viên:', e);
+    res.status(500).json({ success: false, message: e.message || 'Lỗi xử lý máy chủ' });
   }
 });
 

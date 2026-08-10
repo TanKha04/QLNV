@@ -204,6 +204,7 @@ async function showEmployeePage(employee) {
     currentUserViewTab = 'home';
     updateMobileNavUI();
     startNotificationsPolling();
+    startUserSosPolling();
 
     await Promise.all([
         loadEmployeeTimesheets(),
@@ -373,6 +374,8 @@ async function deleteUser(id, name) {
 // Đăng xuất (Alias cho logout function ở dưới để compatibility)
 async function logout() {
     stopNotificationsPolling();
+    sessionStorage.removeItem('tbs_logged_user');
+    sessionStorage.removeItem('tbs_tab_authenticated');
     localStorage.removeItem('tbs_logged_user');
     currentUser = null;
     isAdminMode = false;
@@ -695,15 +698,6 @@ function displayTimesheetsList(timesheets) {
                     <small>Tải lên bởi: ${ts.uploader_name || 'N/A'}</small>
                 </div>
                 <div class="timesheet-actions">
-                    <button class="btn-icon" onclick="viewTimesheetDetails(${ts.id})" title="Xem chi tiết">
-                        👁️
-                    </button>
-                    <button class="btn-icon" onclick="showEditTimesheetModal(${ts.id}, '${(ts.file_name || '').replace(/'/g, "\\'")}', '${ts.month}/${ts.year}')" title="Chỉnh sửa tên">
-                        ✏️
-                    </button>
-                    <button class="btn-icon" onclick="showReplaceTimesheetFile(${ts.id}, '${(ts.file_name || '').replace(/'/g, "\\'")}', '${ts.month}/${ts.year}')" title="Thay thế file mới">
-                        🔁
-                    </button>
                     <button class="btn-icon btn-danger" onclick="deleteTimesheet(${ts.id}, '${ts.month}/${ts.year}')" title="Xóa">
                         🗑️
                     </button>
@@ -1016,7 +1010,10 @@ function switchUserViewTab(tab) {
     if (tab === 'home') {
         updateHomeDashboardData();
     } else if (tab === 'notification') {
-        loadEmployeeNotifications();
+        updateNotifBadge(0);
+        loadEmployeeNotifications().then(() => {
+            markAllNotificationsRead();
+        });
     }
     // Auto scroll top when switching tabs
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1086,6 +1083,22 @@ function displayCurrentUserView() {
         }
     } else if (currentUserViewTab === 'notification') {
         loadEmployeeNotifications();
+    } else if (currentUserViewTab === 'profile') {
+        fetchUserProfile();
+    }
+}
+
+async function fetchUserProfile() {
+    try {
+        const response = await fetch('/api/employee/profile');
+        const data = await response.json();
+        if (data.success && data.data) {
+            if (!currentUser) currentUser = {};
+            Object.assign(currentUser, data.data);
+            updateHomeDashboardData();
+        }
+    } catch(e) {
+        console.error('Lỗi lấy hồ sơ nhân viên:', e);
     }
 }
 
@@ -1103,6 +1116,16 @@ function updateHomeDashboardData() {
     if (homeMsnvEl) homeMsnvEl.textContent = empMsnv;
     if (profNameEl) profNameEl.textContent = empName;
     if (profMsnvEl) profMsnvEl.textContent = 'MSNV: ' + empMsnv;
+
+    const birthEl = document.getElementById('profileBirthDate');
+    const joinEl = document.getElementById('profileJoinDate');
+    const deptEl = document.getElementById('profileDepartment');
+    const seniorityEl = document.getElementById('profileSeniority');
+
+    if (birthEl) birthEl.textContent = (currentUser && currentUser.birth_date) ? currentUser.birth_date : 'Chưa cập nhật';
+    if (joinEl) joinEl.textContent = (currentUser && currentUser.join_date) ? currentUser.join_date : 'Chưa cập nhật';
+    if (deptEl) deptEl.textContent = (currentUser && currentUser.department) ? currentUser.department : 'Chưa cập nhật';
+    if (seniorityEl) seniorityEl.textContent = (currentUser && currentUser.seniority) ? currentUser.seniority : 'Chưa cập nhật';
 
     // 2. Update Salary Quick Card
     updateHomeSalaryAmountDisplay();
@@ -2795,12 +2818,6 @@ function displaySalariesList(salaries) {
                     <small>Tải lên bởi: ${sal.uploader_name || 'N/A'}</small>
                 </div>
                 <div class="timesheet-actions">
-                    <button class="btn-icon" onclick="viewSalaryDetails(${sal.id})" title="Xem chi tiết">
-                        👁️
-                    </button>
-                    <button class="btn-icon" onclick="showEditSalaryModal(${sal.id}, '${(sal.file_name || '').replace(/'/g, "\\'")}', '${sal.month}/${sal.year}')" title="Chỉnh sửa tên">
-                        ✏️
-                    </button>
                     <button class="btn-icon btn-danger" onclick="deleteSalary(${sal.id}, '${sal.month}/${sal.year}')" title="Xóa">
                         🗑️
                     </button>
@@ -3216,21 +3233,27 @@ function selectLoginRole(role) {
 
 function routeToRolePage(user) {
     if (!user) {
+        sessionStorage.removeItem('tbs_logged_user');
+        sessionStorage.removeItem('tbs_tab_authenticated');
         localStorage.removeItem('tbs_logged_user');
         currentUser = null;
         showPage('loginPage');
         return;
     }
     currentUser = user;
-    localStorage.setItem('tbs_logged_user', JSON.stringify(user));
+    sessionStorage.setItem('tbs_logged_user', JSON.stringify(user));
+    sessionStorage.setItem('tbs_tab_authenticated', 'true');
+    localStorage.removeItem('tbs_logged_user');
     const role = user.role || 'user';
 
     if (role === 'timesheet_admin') {
         showPage('timesheetAdminPage');
         loadTimesheetsListInto('timesheetsListSectionAdmin');
+        startAdminChatBadgePolling('timesheet');
     } else if (role === 'salary_admin') {
         showPage('salaryAdminPage');
         loadSalariesListInto('salariesListSectionAdmin');
+        startAdminChatBadgePolling('salary');
     } else if (role === 'system_admin' || role === 'admin') {
         showPage('systemAdminPage');
         initSystemAdminHub();
@@ -3240,6 +3263,19 @@ function routeToRolePage(user) {
 }
 
 async function checkSession() {
+    // Chỉ duy trì đăng nhập nếu tab này đã từng đăng nhập (sessionStorage của tab)
+    const isTabAuth = sessionStorage.getItem('tbs_tab_authenticated');
+    const savedUserStr = sessionStorage.getItem('tbs_logged_user');
+
+    if (!isTabAuth || !savedUserStr) {
+        // Tab mới hoặc copy URL sang tab khác -> Luôn yêu cầu đăng nhập lại
+        localStorage.removeItem('tbs_logged_user');
+        sessionStorage.removeItem('tbs_logged_user');
+        sessionStorage.removeItem('tbs_tab_authenticated');
+        showPage('loginPage');
+        return;
+    }
+
     try {
         const response = await fetch('/api/auth/me');
         const data = await response.json();
@@ -3247,12 +3283,11 @@ async function checkSession() {
         if (data.success && data.loggedIn && data.data) {
             const user = data.data;
             currentUser = user;
-            localStorage.setItem('tbs_logged_user', JSON.stringify(user));
+            sessionStorage.setItem('tbs_logged_user', JSON.stringify(user));
             routeToRolePage(user);
             return;
         }
 
-        const savedUserStr = localStorage.getItem('tbs_logged_user');
         if (savedUserStr) {
             try {
                 const savedUser = JSON.parse(savedUserStr);
@@ -3267,7 +3302,6 @@ async function checkSession() {
         showPage('loginPage');
     } catch (error) {
         console.error('Lỗi kiểm tra session:', error);
-        const savedUserStr = localStorage.getItem('tbs_logged_user');
         if (savedUserStr) {
             try {
                 const savedUser = JSON.parse(savedUserStr);
@@ -3294,14 +3328,14 @@ async function loadTimesheetsListInto(containerId) {
         if (data.success && data.data.length > 0) {
             let html = '<div class="timesheet-cards-grid">';
             data.data.forEach(item => {
+                const escapedName = (item.file_name || '').replace(/'/g, "\\'");
                 html += `
                     <div class="timesheet-card">
                         <div class="card-title">📊 ${item.file_name || 'Bảng công'} (Tháng ${item.month}/${item.year})</div>
                         <div class="card-sub">Ngày tải: ${new Date(item.created_at).toLocaleString('vi-VN')}</div>
                         <div class="card-actions" style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-                            <button onclick="viewTimesheetDetails(${item.id})" class="btn-secondary" style="padding: 6px 12px;">Xem chi tiết</button>
-                            <button onclick="showEditTimesheetModal(${item.id}, '${(item.file_name || '').replace(/'/g, "\\'")}', '${item.month}/${item.year}')" class="btn-secondary" style="padding: 6px 12px; background: #0f766e; color: #fff; border: none; border-radius: 6px; cursor: pointer;">✏️ Sửa tên</button>
-                            <button onclick="showReplaceTimesheetFile(${item.id}, '${(item.file_name || '').replace(/'/g, "\\'")}', '${item.month}/${item.year}')" class="btn-secondary" style="padding: 6px 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer;">🔁 Thay file</button>
+                            <button onclick="viewTimesheetDetails(${item.id})" class="btn-secondary" style="padding: 6px 14px; background: #0284c7; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">👁️ Xem chi tiết</button>
+                            <button onclick="showReplaceTimesheetFile(${item.id}, '${escapedName}', '${item.month}/${item.year}')" class="btn-secondary" style="padding: 6px 12px; background: #16a34a; color: #fff; border: none; border-radius: 6px; cursor: pointer;">🔁 Thay file</button>
                             <button onclick="deleteTimesheet(${item.id}, '${item.month}/${item.year}')" class="btn-danger" style="padding: 6px 12px; background: #ef4444; color: #fff; border: none; border-radius: 6px; cursor: pointer;">Xóa</button>
                         </div>
                     </div>
@@ -3420,6 +3454,7 @@ async function saveEditableTimesheetDetail() {
         if (data.success) {
             alert('✅ Đã lưu thay đổi thành công');
             loadTimesheetsListInto('timesheetsListSectionAdmin');
+            loadTimesheetsListInto('timesheetsListSystemAdmin');
         } else {
             alert('❌ ' + (data.message || 'Lỗi lưu dữ liệu'));
         }
@@ -3492,6 +3527,7 @@ async function saveEditableSalaryDetail() {
         if (data.success) {
             alert('✅ Đã lưu thay đổi thành công');
             loadSalariesListInto('salariesListSectionAdmin');
+            loadSalariesListInto('salariesListSystemAdmin');
         } else {
             alert('❌ ' + (data.message || 'Lỗi lưu dữ liệu'));
         }
@@ -3598,14 +3634,34 @@ function toggleUserChatModal() {
     const isHidden = modal.style.display === 'none';
     modal.style.display = isHidden ? 'flex' : 'none';
     if (isHidden) {
-        fetchUserChatMessages();
+        // Ẩn badge đỏ ngay lập tức trên UI
+        const badge = document.getElementById('userSosChatBadge');
+        if (badge) {
+            badge.style.display = 'none';
+            badge.textContent = '0';
+        }
+        // Gửi API đánh dấu tin nhắn là ĐÃ ĐỌC
+        if (currentUser) {
+            const convId = `chat_${currentUser.employee_id || currentUser.username || currentUser.id}`;
+            fetch('/api/chat/mark-read', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversation_id: convId })
+            }).catch(e => {});
+        }
+        fetchUserChatMessages(true);
         if (!chatPollInterval) {
-            chatPollInterval = setInterval(fetchUserChatMessages, 3000);
+            chatPollInterval = setInterval(() => fetchUserChatMessages(false), 3000);
         }
     }
 }
 
 function openSupportChat(senderRole) {
+    const badge = document.getElementById('userSosChatBadge');
+    if (badge) {
+        badge.style.display = 'none';
+        badge.textContent = '0';
+    }
     toggleUserChatModal();
 }
 
@@ -3691,6 +3747,17 @@ async function loadBroadcastNotifications(page = 1) {
     try {
         const res = await fetch(`/api/system-admin/notifications?page=${page}&limit=${notificationsPerPage}`);
         
+        if (res.status === 401) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 24px 20px; background: #fff5f5; border: 1px solid #fed7d7; border-radius: 8px; margin: 12px 0;">
+                    <p style="font-weight: 600; color: #e53e3e; margin: 0 0 8px 0; font-size: 14px;">🔒 Phiên đăng nhập đã hết hạn hoặc máy chủ vừa được khởi động lại.</p>
+                    <small style="color: #718096; display: block; margin-bottom: 12px;">Vui lòng bấm nút bên dưới để đăng nhập lại tài khoản Admin.</small>
+                    <button onclick="logout()" class="btn-primary" style="padding: 6px 16px; font-size: 13px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer;">🔑 Đăng Nhập Lại</button>
+                </div>
+            `;
+            return;
+        }
+
         if (!res.ok) {
             throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
@@ -3982,10 +4049,10 @@ async function sendUserChatMessage() {
     }
 }
 
-async function fetchUserChatMessages() {
+async function fetchUserChatMessages(markRead = true) {
     const convId = currentUser ? `chat_${currentUser.employee_id || currentUser.username || currentUser.id}` : 'chat_guest';
     try {
-        const response = await fetch(`/api/chat/messages?conversation_id=${encodeURIComponent(convId)}`);
+        const response = await fetch(`/api/chat/messages?conversation_id=${encodeURIComponent(convId)}${markRead ? '&mark_read=true' : ''}`);
         const data = await response.json();
         if (data.success) {
             const body = document.getElementById('userChatMessages');
@@ -4008,11 +4075,44 @@ async function fetchUserChatMessages() {
             });
             body.innerHTML = html;
             body.scrollTop = body.scrollHeight;
+            checkUserSosUnreadCount();
         }
     } catch (e) {
         console.error('Lỗi tải tin nhắn:', e);
     }
 }
+
+let userSosPollInterval = null;
+
+async function checkUserSosUnreadCount() {
+    if (!currentUser) return;
+    const convId = `chat_${currentUser.employee_id || currentUser.username || currentUser.id}`;
+    try {
+        const response = await fetch(`/api/chat/unread-count?conversation_id=${encodeURIComponent(convId)}`);
+        const data = await response.json();
+        if (data.success) {
+            const unreadCount = data.unread_count || 0;
+            const badge = document.getElementById('userSosChatBadge');
+            if (badge) {
+                if (unreadCount > 0) {
+                    badge.textContent = unreadCount;
+                    badge.style.display = 'inline-flex';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        }
+    } catch(e) {}
+}
+
+function startUserSosPolling() {
+    checkUserSosUnreadCount();
+    if (!userSosPollInterval) {
+        userSosPollInterval = setInterval(checkUserSosUnreadCount, 3000);
+    }
+}
+
+let sysAdminChatPollInterval = null;
 
 // SYSTEM ADMIN MASTER HUB LOGIC
 async function initSystemAdminHub() {
@@ -4025,16 +4125,284 @@ async function initSystemAdminHub() {
         loadTimesheetsListInto('timesheetsListSystemAdmin'),
         loadSalariesListInto('salariesListSystemAdmin')
     ]);
+
+    if (!sysAdminChatPollInterval) {
+        sysAdminChatPollInterval = setInterval(() => {
+            loadSystemAdminChatHub();
+            loadSystemAdminOverview();
+            if (typeof activeSysConversationId !== 'undefined' && activeSysConversationId) {
+                fetchSysChatMessages();
+            }
+        }, 3000);
+    }
 }
 
 function switchSysTab(tab) {
-    const tabs = ['chat', 'roles', 'timesheet', 'salary'];
+    const tabs = ['chat', 'roles', 'timesheet', 'salary', 'employees'];
     tabs.forEach(t => {
         const btn = document.getElementById(`tabBtnSys${t.charAt(0).toUpperCase() + t.slice(1)}`);
         const content = document.getElementById(`sysTab${t.charAt(0).toUpperCase() + t.slice(1)}`);
         if (btn) btn.classList.toggle('active', t === tab);
         if (content) content.style.display = (t === tab) ? 'block' : 'none';
     });
+    if (tab === 'employees') {
+        loadSystemAdminEmployees();
+    }
+}
+
+// ============= XỬ LÝ ĐỔI MẬT KHẨU NGƯỜI DÙNG =============
+async function handleUserChangePassword(event) {
+    event.preventDefault();
+    const current_password = document.getElementById('userCurrentPassword').value.trim();
+    const new_password = document.getElementById('userNewPassword').value.trim();
+    const confirm_password = document.getElementById('userConfirmPassword').value.trim();
+    const msgBox = document.getElementById('userChangePasswordMsg');
+
+    if (!current_password || !new_password || !confirm_password) {
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Vui lòng nhập đầy đủ thông tin mật khẩu';
+        }
+        return;
+    }
+
+    if (new_password !== confirm_password) {
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Mật khẩu mới và mật khẩu xác nhận không khớp';
+        }
+        return;
+    }
+
+    if (new_password.length < 4) {
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Mật khẩu mới phải có ít nhất 4 ký tự';
+        }
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/employee/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ current_password, new_password, confirm_password })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            if (msgBox) {
+                msgBox.style.display = 'block';
+                msgBox.className = 'form-msg-box success';
+                msgBox.textContent = '✅ ' + data.message;
+            }
+            document.getElementById('userCurrentPassword').value = '';
+            document.getElementById('userNewPassword').value = '';
+            document.getElementById('userConfirmPassword').value = '';
+        } else {
+            if (msgBox) {
+                msgBox.style.display = 'block';
+                msgBox.className = 'form-msg-box error';
+                msgBox.textContent = '❌ ' + (data.message || 'Lỗi đổi mật khẩu');
+            }
+        }
+    } catch(e) {
+        console.error('Lỗi đổi mật khẩu:', e);
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Lỗi kết nối đến máy chủ';
+        }
+    }
+}
+
+// ============= XỬ LÝ UPLOAD EXCEL THÔNG TIN NHÂN VIÊN (MASTER HUB) =============
+let selectedEmployeeFile = null;
+let systemEmployeesList = [];
+
+function handleEmployeeFileSelect(event) {
+    const file = event.target.files[0];
+    if (file) {
+        selectedEmployeeFile = file;
+        const nameEl = document.getElementById('employeeFileName');
+        const previewEl = document.getElementById('employeeFilePreview');
+        if (nameEl) nameEl.textContent = '📊 ' + file.name;
+        if (previewEl) previewEl.style.display = 'flex';
+    }
+}
+
+function clearEmployeeFile() {
+    selectedEmployeeFile = null;
+    const input = document.getElementById('employeeExcelInput');
+    const previewEl = document.getElementById('employeeFilePreview');
+    if (input) input.value = '';
+    if (previewEl) previewEl.style.display = 'none';
+}
+
+async function handleEmployeeUploadSubmit(event) {
+    event.preventDefault();
+    if (!selectedEmployeeFile) {
+        alert('Vui lòng chọn file Excel thông tin nhân viên');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('employee_file', selectedEmployeeFile);
+
+    try {
+        const response = await fetch('/api/system-admin/upload-employees', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('✅ ' + data.message);
+            clearEmployeeFile();
+            loadSystemAdminEmployees();
+        } else {
+            alert('❌ ' + (data.message || 'Lỗi tải lên dữ liệu nhân viên'));
+        }
+    } catch(e) {
+        console.error('Lỗi upload file nhân viên:', e);
+        alert('❌ Lỗi kết nối máy chủ');
+    }
+}
+
+async function loadSystemAdminEmployees() {
+    try {
+        const response = await fetch('/api/system-admin/employees');
+        const data = await response.json();
+        if (data.success) {
+            systemEmployeesList = data.data || [];
+            renderSystemEmployeesTable(systemEmployeesList);
+        }
+    } catch(e) {
+        console.error('Lỗi tải danh sách nhân viên:', e);
+    }
+}
+
+function renderSystemEmployeesTable(employees) {
+    const tbody = document.getElementById('systemEmployeesTableBody');
+    if (!tbody) return;
+
+    if (!employees || employees.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: #94a3b8; padding: 20px;">Chưa có dữ liệu nhân viên. Hãy tải lên file Excel ở trên.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = employees.map(emp => `
+        <tr>
+            <td style="font-weight: 700; color: #2563eb;">${escapeHtml(emp.username || emp.employee_id || '')}</td>
+            <td style="font-weight: 600; color: #1e293b;">${escapeHtml(emp.full_name || '')}</td>
+            <td>${escapeHtml(emp.birth_date || '--')}</td>
+            <td>${escapeHtml(emp.join_date || '--')}</td>
+            <td>${escapeHtml(emp.department || '--')}</td>
+            <td>${escapeHtml(emp.seniority || '--')}</td>
+            <td>
+                <button onclick="openEmployeeDetailModal(${emp.id})" class="btn-secondary" style="padding: 4px 10px; font-size: 12px; background: #0284c7; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">👁️ Xem chi tiết</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function openEmployeeDetailModal(empId) {
+    const emp = systemEmployeesList.find(e => e.id === empId || String(e.id) === String(empId));
+    if (!emp) return;
+
+    document.getElementById('editEmpId').value = emp.id;
+    document.getElementById('editEmpUsername').value = emp.username || emp.employee_id || '';
+    document.getElementById('editEmpFullName').value = emp.full_name || '';
+    document.getElementById('editEmpBirthDate').value = emp.birth_date || '';
+    document.getElementById('editEmpJoinDate').value = emp.join_date || '';
+    document.getElementById('editEmpDepartment').value = emp.department || '';
+    document.getElementById('editEmpSeniority').value = emp.seniority || '';
+    document.getElementById('editEmpNewPassword').value = '';
+
+    const msgBox = document.getElementById('editEmpMsg');
+    if (msgBox) {
+        msgBox.style.display = 'none';
+        msgBox.textContent = '';
+    }
+
+    const modal = document.getElementById('employeeDetailModal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeEmployeeDetailModal() {
+    const modal = document.getElementById('employeeDetailModal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function handleSaveEmployeeDetail(event) {
+    event.preventDefault();
+
+    const id = document.getElementById('editEmpId').value;
+    const username = document.getElementById('editEmpUsername').value;
+    const full_name = document.getElementById('editEmpFullName').value.trim();
+    const birth_date = document.getElementById('editEmpBirthDate').value.trim();
+    const join_date = document.getElementById('editEmpJoinDate').value.trim();
+    const department = document.getElementById('editEmpDepartment').value.trim();
+    const seniority = document.getElementById('editEmpSeniority').value.trim();
+    const new_password = document.getElementById('editEmpNewPassword').value.trim();
+    const msgBox = document.getElementById('editEmpMsg');
+
+    if (!full_name) {
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Họ và tên không được để trống';
+        }
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system-admin/update-employee', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, username, full_name, birth_date, join_date, department, seniority, new_password })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('✅ ' + data.message);
+            closeEmployeeDetailModal();
+            loadSystemAdminEmployees();
+        } else {
+            if (msgBox) {
+                msgBox.style.display = 'block';
+                msgBox.className = 'form-msg-box error';
+                msgBox.textContent = '❌ ' + (data.message || 'Lỗi cập nhật');
+            }
+        }
+    } catch (e) {
+        console.error('Lỗi lưu thông tin nhân viên:', e);
+        if (msgBox) {
+            msgBox.style.display = 'block';
+            msgBox.className = 'form-msg-box error';
+            msgBox.textContent = '❌ Lỗi kết nối đến máy chủ';
+        }
+    }
+}
+
+function filterEmployeesList() {
+    const keyword = (document.getElementById('employeeSearchInput')?.value || '').trim().toLowerCase();
+    if (!keyword) {
+        renderSystemEmployeesTable(systemEmployeesList);
+        return;
+    }
+
+    const filtered = systemEmployeesList.filter(emp => {
+        const msnv = String(emp.username || emp.employee_id || '').toLowerCase();
+        const name = String(emp.full_name || '').toLowerCase();
+        const dept = String(emp.department || '').toLowerCase();
+        return msnv.includes(keyword) || name.includes(keyword) || dept.includes(keyword);
+    });
+
+    renderSystemEmployeesTable(filtered);
 }
 
 async function loadSystemAdminOverview() {
@@ -4064,20 +4432,39 @@ async function loadSystemAdminChatHub() {
                 return;
             }
             let html = '';
+            let totalUnread = 0;
             data.data.forEach(c => {
                 const roleBadge = c.sender_role === 'timesheet_admin' ? '📊 QTV Công' : (c.sender_role === 'salary_admin' ? '💰 QTV Lương' : '👤 Người Dùng');
-                const isSelected = activeSysConversationId === c.conversation_id;
+                const isSelected = typeof activeSysConversationId !== 'undefined' && activeSysConversationId === c.conversation_id;
+                // Nếu cuộc hội thoại đang được Admin mở -> Coi như đã đọc (unread = 0)
+                const unread = isSelected ? 0 : (c.unread_count || 0);
+                totalUnread += unread;
                 html += `
-                    <div class="conv-item ${isSelected ? 'active' : ''}" onclick="selectConversation('${c.conversation_id}', '${c.sender_name}', '${c.sender_role}')">
+                    <div class="conv-item ${isSelected ? 'active' : ''} ${unread > 0 ? 'has-unread' : ''}" onclick="selectConversation('${c.conversation_id}', '${c.sender_name}', '${c.sender_role}')">
                         <div class="conv-info">
                             <span class="conv-name">${c.sender_name} <small style="color:#047857;">(${roleBadge})</small></span>
-                            <span class="conv-msg">${c.image_url ? '📷 [Hình ảnh]' : (c.last_message || '')}</span>
+                            <span class="conv-msg" style="${unread > 0 ? 'font-weight: 700; color: #0f172a;' : ''}">${c.image_url ? '📷 [Hình ảnh]' : (c.last_message || '')}</span>
                         </div>
-                        ${c.unread_count > 0 ? `<span class="conv-badge">${c.unread_count}</span>` : ''}
+                        ${unread > 0 ? `<span class="conv-badge pulse">${unread}</span>` : ''}
                     </div>
                 `;
             });
             listEl.innerHTML = html;
+
+            // Cập nhật tab badge
+            const tabBadge = document.getElementById('sysChatTabBadge');
+            if (tabBadge) {
+                if (totalUnread > 0) {
+                    tabBadge.textContent = totalUnread;
+                    tabBadge.style.display = 'inline-flex';
+                } else {
+                    tabBadge.style.display = 'none';
+                }
+            }
+            const statUnread = document.getElementById('sysUnreadChatsCount');
+            if (statUnread) {
+                statUnread.textContent = totalUnread;
+            }
         }
     } catch (e) {
         console.error('Lỗi load conversaciones:', e);
@@ -4101,14 +4488,21 @@ function selectConversation(convId, senderName, senderRole) {
         <span>💬 Đang hỗ trợ: <strong>${senderName}</strong> <span class="role-badge ${senderRole === 'timesheet_admin' ? 'cong' : (senderRole === 'salary_admin' ? 'luong' : 'user')}">${senderRole}</span></span>
     `;
 
-    fetchSysChatMessages();
+    // Gửi yêu cầu đánh dấu tin nhắn là ĐÃ ĐỌC trên server
+    fetch('/api/chat/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation_id: convId })
+    }).catch(e => {});
+
+    fetchSysChatMessages(true);
     loadSystemAdminChatHub();
 }
 
-async function fetchSysChatMessages() {
+async function fetchSysChatMessages(markRead = true) {
     if (!activeSysConversationId) return;
     try {
-        const response = await fetch(`/api/chat/messages?conversation_id=${encodeURIComponent(activeSysConversationId)}`);
+        const response = await fetch(`/api/chat/messages?conversation_id=${encodeURIComponent(activeSysConversationId)}${markRead ? '&mark_read=true' : ''}`);
         const data = await response.json();
         if (data.success) {
             const body = document.getElementById('chatRoomMessages');
@@ -4391,7 +4785,7 @@ async function handleSubAdminProfileSubmit(event) {
             if (currentUser) {
                 currentUser.full_name = full_name;
                 currentUser.username = username;
-                localStorage.setItem('tbs_logged_user', JSON.stringify(currentUser));
+                sessionStorage.setItem('tbs_logged_user', JSON.stringify(currentUser));
             }
             setTimeout(() => {
                 closeSubAdminProfileModal();
@@ -4413,6 +4807,45 @@ async function handleSubAdminProfileSubmit(event) {
 // ==================== SUB-ADMIN LEFT SIDEBAR & DEDICATED PAGE HANDLERS ====================
 let dedicatedChatPollInterval = null;
 let dedicatedSelectedChatImageUrl = null;
+let adminChatBadgePollInterval = null;
+let adminChatBadgeAdminType = null;
+
+// Polling nền: Kiểm tra tin nhắn chưa đọc từ QTV Hệ Thống khi sub-admin không ở tab Chat
+async function checkAdminChatBadge() {
+    if (!currentUser || !adminChatBadgeAdminType) return;
+    const prefix = adminChatBadgeAdminType === 'timesheet' ? 'ts' : 'sal';
+    const badgeEl = document.getElementById(prefix + 'ChatBadge');
+    if (!badgeEl) return;
+
+    const convId = 'chat_' + (currentUser.username || currentUser.employee_id);
+    try {
+        const res = await fetch(`/api/chat/unread-count?conversation_id=${encodeURIComponent(convId)}`);
+        const data = await res.json();
+        if (data.success) {
+            const count = data.unread_count || 0;
+            if (count > 0) {
+                badgeEl.textContent = count;
+                badgeEl.style.display = 'inline-flex';
+            } else {
+                badgeEl.style.display = 'none';
+            }
+        }
+    } catch(e) { /* bỏ qua lỗi mạng */ }
+}
+
+function startAdminChatBadgePolling(adminType) {
+    adminChatBadgeAdminType = adminType;
+    if (adminChatBadgePollInterval) clearInterval(adminChatBadgePollInterval);
+    checkAdminChatBadge(); // chạy ngay lập tức
+    adminChatBadgePollInterval = setInterval(checkAdminChatBadge, 5000);
+}
+
+function stopAdminChatBadgePolling() {
+    if (adminChatBadgePollInterval) {
+        clearInterval(adminChatBadgePollInterval);
+        adminChatBadgePollInterval = null;
+    }
+}
 
 function switchSubAdminTab(adminType, tabName, btnElement) {
     const parent = btnElement.closest('.sidebar-menu');
@@ -4431,14 +4864,22 @@ function switchSubAdminTab(adminType, tabName, btnElement) {
     if (profileTab) profileTab.style.display = tabName === 'profile' ? 'block' : 'none';
 
     if (tabName === 'chat') {
+        // Khi mở tab Chat: dừng badge poll nền, bật full message poll
+        stopAdminChatBadgePolling();
         loadDedicatedChatMessages(adminType);
         if (dedicatedChatPollInterval) clearInterval(dedicatedChatPollInterval);
         dedicatedChatPollInterval = setInterval(() => loadDedicatedChatMessages(adminType), 3000);
+        // Ẩn badge khi đang xem chat
+        const prefix = adminType === 'timesheet' ? 'ts' : 'sal';
+        const badge = document.getElementById(prefix + 'ChatBadge');
+        if (badge) badge.style.display = 'none';
     } else {
         if (dedicatedChatPollInterval) {
             clearInterval(dedicatedChatPollInterval);
             dedicatedChatPollInterval = null;
         }
+        // Khi rời tab Chat: bật lại badge poll nền
+        startAdminChatBadgePolling(adminType);
     }
 
     if (tabName === 'profile') {
@@ -4518,7 +4959,7 @@ async function saveProfileInfo(adminType, event) {
             if (currentUser) {
                 currentUser.full_name = full_name;
                 currentUser.employee_id = employee_id;
-                localStorage.setItem('tbs_logged_user', JSON.stringify(currentUser));
+                sessionStorage.setItem('tbs_logged_user', JSON.stringify(currentUser));
             }
             updateSidebarAvatar(adminType, null, full_name);
         } else {
@@ -4616,6 +5057,7 @@ async function loadDedicatedChatMessages(adminType) {
         const response = await fetch(`/api/chat/messages?conversation_id=${encodeURIComponent(conversation_id)}`);
         const data = await response.json();
         if (data.success) {
+            let unreadFromAdmin = 0;
             if (data.data.length === 0) {
                 container.innerHTML = `
                     <div class="chat-msg system">
@@ -4626,6 +5068,9 @@ async function loadDedicatedChatMessages(adminType) {
                 let html = '';
                 data.data.forEach(m => {
                     const isSelf = m.sender_role === currentUser.role || m.sender_id === (currentUser.username || currentUser.employee_id);
+                    if (!isSelf && m.is_read === 0) {
+                        unreadFromAdmin++;
+                    }
                     const timeStr = new Date(m.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                     let mediaHtml = m.image_url ? `<div class="chat-img-wrapper"><img src="${m.image_url}" onclick="window.open('${m.image_url}')" style="max-width: 220px; border-radius: 10px; cursor: pointer; margin-top: 6px;"></div>` : '';
 
@@ -4638,6 +5083,16 @@ async function loadDedicatedChatMessages(adminType) {
                 });
                 container.innerHTML = html;
                 container.scrollTop = container.scrollHeight;
+            }
+
+            const badge = document.getElementById(prefix + 'ChatBadge');
+            if (badge) {
+                if (unreadFromAdmin > 0) {
+                    badge.textContent = unreadFromAdmin;
+                    badge.style.display = 'inline-flex';
+                } else {
+                    badge.style.display = 'none';
+                }
             }
         }
     } catch(e) {

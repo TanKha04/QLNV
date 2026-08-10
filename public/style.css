@@ -1658,6 +1658,14 @@ body {
     gap: 10px;
 }
 
+.header-logo-img {
+    height: 32px;
+    background: #ffffff;
+    padding: 3px 8px;
+    border-radius: 8px;
+    object-fit: contain;
+}
+
 .tbs-logo-badge {
     background: #ffffff;
     color: #064e3b;
@@ -2446,8 +2454,25 @@ body.dark-theme .bottom-nav-item.active {
     color: #ffffff;
     font-size: 11px;
     font-weight: 800;
-    padding: 2px 7px;
+    padding: 3px 8px;
     border-radius: 20px;
+    box-shadow: 0 2px 6px rgba(239, 68, 68, 0.45);
+    min-width: 20px;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+@keyframes badgePulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+}
+
+.conv-badge.pulse {
+    animation: badgePulse 2s infinite ease-in-out;
 }
 
 /* Chat Room Main */
@@ -4400,5 +4425,91 @@ body.dark-theme .bottom-nav-item.active {
 .btn-danger-outline:hover {
     background: #fef2f2 !important;
     border-color: #ef4444 !important;
+}
+
+/* User Profile Change Password & Employee Upload Styling */
+.user-password-card {
+    margin-top: 20px;
+    text-align: left;
+    width: 100%;
+    background: #f8fafc;
+    border-radius: 14px;
+    padding: 18px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+    box-sizing: border-box;
+}
+
+.user-pwd-title {
+    margin-top: 0;
+    margin-bottom: 14px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.form-group-item {
+    margin-bottom: 12px;
+}
+
+.pwd-input-lbl {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #64748b;
+    display: block;
+    margin-bottom: 5px;
+    letter-spacing: 0.3px;
+}
+
+.pwd-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    font-size: 13.5px;
+    transition: border-color 0.2s;
+}
+
+.pwd-input:focus {
+    border-color: #2563eb;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.btn-change-pwd {
+    width: 100%;
+    justify-content: center;
+    padding: 11px;
+    margin-top: 6px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.employee-upload-card {
+    border-left: 4px solid #10b981 !important;
+}
+
+.form-msg-box {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 12px;
+    font-weight: 600;
+}
+
+.form-msg-box.success {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.form-msg-box.error {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
 }
 

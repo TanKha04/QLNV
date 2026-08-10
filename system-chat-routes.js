@@ -109,9 +109,53 @@ function setupSystemAndChatRoutes(app, db) {
     );
   });
 
+  // API Lấy số tin nhắn chưa đọc của cuộc hội thoại
+  app.get('/api/chat/unread-count', (req, res) => {
+    const { conversation_id } = req.query;
+    if (!conversation_id) {
+      return res.json({ success: true, unread_count: 0 });
+    }
+
+    const userRole = (req.session && req.session.role) || '';
+    const isSysAdmin = userRole === 'system_admin' || userRole === 'admin';
+
+    const sql = isSysAdmin
+      ? `SELECT COUNT(*) as count FROM support_messages WHERE conversation_id = ? AND is_read = 0 AND sender_role != 'system_admin'`
+      : `SELECT COUNT(*) as count FROM support_messages WHERE conversation_id = ? AND is_read = 0 AND sender_role = 'system_admin'`;
+
+    db.query(sql, [conversation_id], (err, results) => {
+      if (err) {
+        console.error('Lỗi lấy unread-count:', err);
+        return res.json({ success: true, unread_count: 0 });
+      }
+      res.json({ success: true, unread_count: results[0] ? results[0].count : 0 });
+    });
+  });
+
+  // API Đánh dấu tất cả tin nhắn trong cuộc hội thoại là đã đọc
+  app.post('/api/chat/mark-read', (req, res) => {
+    const { conversation_id } = req.body;
+    if (!conversation_id) {
+      return res.status(400).json({ success: false, message: 'Thiếu conversation_id' });
+    }
+
+    const userRole = (req.session && req.session.role) || '';
+    const isSysAdmin = userRole === 'system_admin' || userRole === 'admin';
+
+    if (isSysAdmin) {
+      db.query('UPDATE support_messages SET is_read = 1 WHERE conversation_id = ? AND sender_role != ?', [conversation_id, 'system_admin'], (err) => {
+        res.json({ success: true });
+      });
+    } else {
+      db.query('UPDATE support_messages SET is_read = 1 WHERE conversation_id = ? AND sender_role = ?', [conversation_id, 'system_admin'], (err) => {
+        res.json({ success: true });
+      });
+    }
+  });
+
   // API Lấy tin nhắn của cuộc hội thoại
   app.get('/api/chat/messages', (req, res) => {
-    const { conversation_id } = req.query;
+    const { conversation_id, mark_read } = req.query;
 
     if (!conversation_id) {
       return res.status(400).json({ success: false, message: 'Thiếu conversation_id' });
@@ -129,8 +173,17 @@ function setupSystemAndChatRoutes(app, db) {
         return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
       }
 
-      // Đánh dấu đã đọc nếu là receiver
-      db.query('UPDATE support_messages SET is_read = 1 WHERE conversation_id = ?', [conversation_id]);
+      // Chỉ đánh dấu đã đọc khi client yêu cầu (mark_read === 'true' hoặc '1')
+      if (mark_read === 'true' || mark_read === '1') {
+        const userRole = (req.session && req.session.role) || '';
+        const isSysAdmin = userRole === 'system_admin' || userRole === 'admin';
+
+        if (isSysAdmin) {
+          db.query('UPDATE support_messages SET is_read = 1 WHERE conversation_id = ? AND sender_role != ?', [conversation_id, 'system_admin']);
+        } else {
+          db.query('UPDATE support_messages SET is_read = 1 WHERE conversation_id = ? AND sender_role = ?', [conversation_id, 'system_admin']);
+        }
+      }
 
       res.json({ success: true, data: results });
     });
