@@ -1,6 +1,35 @@
+# Dependencies
 node_modules/
-*.db
+package-lock.json
+
+# Environment variables
 .env
+.env.local
+.env.production
+
+# Logs
 *.log
-uploads/*.xlsx
-uploads/*.xls
+npm-debug.log*
+
+# Database
+database.db
+*.sqlite
+*.db
+
+# Uploads
+uploads/
+uploads/avatars/
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temporary files
+*.tmp
+.cache/
