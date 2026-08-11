@@ -309,6 +309,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Serve avatar images
 app.use('/avatars', express.static(path.join(__dirname, 'uploads', 'avatars')));
 
+// Hàm hỗ trợ tạo thông báo lỗi CSDL rõ ràng
+function formatDbErrorMessage(err, defaultMsg = 'Lỗi hệ thống') {
+  if (!err) return defaultMsg;
+  console.error('CSDL Error:', err.message || err);
+  const isMissingCloudDb = process.env.RENDER && !process.env.DB_HOST;
+  if (isMissingCloudDb) {
+    return 'Chưa cấu hình biến môi trường CSDL (DB_HOST) trên Render Dashboard';
+  }
+  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT' || err.code === 'ER_ACCESS_DENIED_ERROR' || err.code === 'PROTOCOL_CONNECTION_LOST') {
+    return 'Lỗi kết nối CSDL MySQL: ' + (err.message || 'Không thể kết nối đến máy chủ CSDL');
+  }
+  return defaultMsg + (err.message ? ': ' + err.message : '');
+}
+
 // API: Tra cứu thông tin người dùng (không cần đăng nhập)
 app.post('/api/lookup', (req, res) => {
   const { username } = req.body;
@@ -331,7 +345,7 @@ app.post('/api/lookup', (req, res) => {
       console.error('Lỗi tra cứu:', err.message);
       return res.status(500).json({ 
         success: false, 
-        message: 'Lỗi hệ thống' 
+        message: formatDbErrorMessage(err) 
       });
     }
 
@@ -437,12 +451,9 @@ app.post('/api/login', (req, res) => {
   db.query(query, [username], (err, results) => {
     if (err) {
       console.error('Lỗi đăng nhập:', err.message);
-      const isMissingCloudDb = process.env.RENDER && !process.env.DB_HOST;
       return res.status(500).json({ 
         success: false, 
-        message: isMissingCloudDb 
-          ? 'Chưa cấu hình biến môi trường CSDL (DB_HOST) trên Render Dashboard' 
-          : 'Lỗi kết nối CSDL (Vui lòng kiểm tra cấu hình MySQL)' 
+        message: formatDbErrorMessage(err, 'Lỗi kết nối CSDL (Vui lòng kiểm tra cấu hình MySQL)') 
       });
     }
 
@@ -463,7 +474,7 @@ app.post('/api/login', (req, res) => {
         console.error('Lỗi kiểm tra mật khẩu:', err.message);
         return res.status(500).json({ 
           success: false, 
-          message: 'Lỗi hệ thống' 
+          message: 'Lỗi hệ thống: ' + err.message 
         });
       }
 
@@ -802,11 +813,21 @@ app.post('/api/employee/login', (req, res) => {
   `;
 
   db.query(userQuery, [employee_id, employee_id], (err, userResults) => {
-    if (!err && userResults.length > 0) {
+    if (err) {
+      console.error('Lỗi truy vấn users:', err.message);
+      return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
+    }
+
+    if (userResults && userResults.length > 0) {
       const dbUser = userResults[0];
 
-      bcrypt.compare(password, dbUser.password, (err, isMatch) => {
-        if (!err && isMatch) {
+      bcrypt.compare(password, dbUser.password, (bcryptErr, isMatch) => {
+        if (bcryptErr) {
+          console.error('Lỗi kiểm tra mật khẩu:', bcryptErr.message);
+          return res.status(500).json({ success: false, message: 'Lỗi hệ thống: ' + bcryptErr.message });
+        }
+
+        if (isMatch) {
           req.session.userId = dbUser.id;
           req.session.username = dbUser.username;
           req.session.employeeId = dbUser.username || dbUser.employee_id;
@@ -832,15 +853,17 @@ app.post('/api/employee/login', (req, res) => {
             }
           });
         }
-        
-        checkTimesheetEmployee();
+
+        // Đã tìm thấy trong users nhưng bcrypt.compare = false. 
+        // Tiếp tục kiểm tra bảng công / bảng lương (phòng trường hợp dùng MK plain-text trong Excel)
+        checkTimesheetEmployee(true);
       });
     } else {
-      checkTimesheetEmployee();
+      checkTimesheetEmployee(false);
     }
   });
 
-  function checkTimesheetEmployee() {
+  function checkTimesheetEmployee(foundInUsers = false) {
     const timesheetQuery = `
       SELECT tr.*, t.month, t.year
       FROM timesheet_records tr
@@ -859,21 +882,27 @@ app.post('/api/employee/login', (req, res) => {
 
     db.query(timesheetQuery, [employee_id], (err, tsRecords) => {
       if (err) {
-        console.error('Lỗi đăng nhập nhân viên:', err.message);
-        return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+        console.error('Lỗi đăng nhập nhân viên (timesheet query):', err.message);
+        return res.status(500).json({ success: false, message: formatDbErrorMessage(err) });
       }
 
       db.query(salaryQuery, [employee_id], (err2, salRecords) => {
         if (err2) {
-          console.error('Lỗi đăng nhập nhân viên:', err2.message);
-          return res.status(500).json({ success: false, message: 'Lỗi hệ thống' });
+          console.error('Lỗi đăng nhập nhân viên (salary query):', err2.message);
+          return res.status(500).json({ success: false, message: formatDbErrorMessage(err2) });
         }
 
-        if (tsRecords.length === 0 && salRecords.length === 0) {
+        const safeTs = tsRecords || [];
+        const safeSal = salRecords || [];
+
+        if (safeTs.length === 0 && safeSal.length === 0) {
+          if (foundInUsers) {
+            return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác' });
+          }
           return res.status(401).json({ success: false, message: 'Tài khoản / MSNV không tồn tại trong hệ thống' });
         }
 
-        const allRecords = [...tsRecords, ...salRecords];
+        const allRecords = [...safeTs, ...safeSal];
         const matched = allRecords.find(r => r.password && String(r.password).trim() === String(password).trim());
 
         if (!matched) {

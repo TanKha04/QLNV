@@ -139,6 +139,23 @@ body {
     line-height: 1.5;
 }
 
+.btn-toggle-admin {
+    background: transparent;
+    border: none;
+    color: #16a34a;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 8px 14px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.btn-toggle-admin:hover {
+    background: #f0fdf4;
+    color: #15803d;
+}
+
 /* Form inputs */
 .form-group {
     margin-bottom: 22px;

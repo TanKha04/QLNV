@@ -44,6 +44,8 @@ function initializeApp() {
 function toggleAdminMode() {
     switchMode(!isAdminMode);
 }
+window.toggleAdminMode = toggleAdminMode;
+window.switchMode = switchMode;
 
 // Chuyển đổi giữa chế độ tra cứu và admin
 function switchMode(adminMode) {
